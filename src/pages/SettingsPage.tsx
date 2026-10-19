@@ -294,9 +294,12 @@ export function SettingsPage({ targetIde, onToast, onSettings }: SettingsPagePro
       </div>
 
       <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
-        <Row title="每日定时签到" desc="到达设定时间时自动为全部 Trae CN 账号签到">
-          <Toggle on={settings.daily_checkin} onToggle={() => apply({ daily_checkin: !settings.daily_checkin })} />
-        </Row>
+        {/* 每日定时签名为 CN 专有活动，国际版不展示该设置 */}
+        {targetIde === "trae-cn" && (
+          <Row title="每日定时签到" desc="到达设定时间时自动为全部 Trae CN 账号签到">
+            <Toggle on={settings.daily_checkin} onToggle={() => apply({ daily_checkin: !settings.daily_checkin })} />
+          </Row>
+        )}
         <Row title="每日定时刷新额度" desc="到达设定时间时自动刷新全部账号额度，并记录消耗趋势">
           <Toggle on={settings.daily_refresh} onToggle={() => apply({ daily_refresh: !settings.daily_refresh })} />
         </Row>

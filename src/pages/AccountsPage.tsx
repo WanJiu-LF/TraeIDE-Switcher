@@ -275,14 +275,16 @@ export function AccountsPage(props: AccountsPageProps) {
           >
             {batchBusy === "refresh" ? "刷新中…" : "批量刷新额度"}
           </button>
-          <button
-            className="btn-ghost flex-none whitespace-nowrap disabled:opacity-50"
-            disabled={!sel.length || batchBusy !== null || !isCn}
-            title={isCn ? "仅 CN 账号支持签到" : "国际版无签到活动"}
-            onClick={() => onBatch("checkin", sel)}
-          >
-            {batchBusy === "checkin" ? "签到中…" : "批量签到"}
-          </button>
+          {/* 批量签名为 CN 专有活动：国际版不展示该入口 */}
+          {isCn && (
+            <button
+              className="btn-ghost flex-none whitespace-nowrap disabled:opacity-50"
+              disabled={!sel.length || batchBusy !== null}
+              onClick={() => onBatch("checkin", sel)}
+            >
+              {batchBusy === "checkin" ? "签到中…" : "批量签到"}
+            </button>
+          )}
           <button
             className="btn-ghost flex-none whitespace-nowrap disabled:opacity-50"
             disabled={!sel.length || batchBusy !== null}

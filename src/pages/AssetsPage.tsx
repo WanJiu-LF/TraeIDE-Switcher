@@ -84,7 +84,8 @@ const SESSION_PRESETS: { label: string; command: string; args: string }[] = [
 ];
 
 // F2 错误码字典：逐条给出码义、判定出处与处置方式（出处均来自源码定位或实测）
-const ERROR_CODES: { code: string; meaning: string; source: string; action: string }[] = [
+// cnOnly：仅 CN 侧出现的码（签到/活动），国际版不展示
+const ERROR_CODES: { code: string; meaning: string; source: string; action: string; cnOnly?: boolean }[] = [
   {
     code: "20401",
     meaning: "设备绑定数量达上限（该设备已绑定过多账号）",
@@ -112,8 +113,9 @@ const ERROR_CODES: { code: string; meaning: string; source: string; action: stri
   {
     code: "9095 / 9090",
     meaning: "当前设备今日已签到 / 活动暂不可用",
-    source: "ug checkin_credits、activity/action 实测",
+    source: "ug checkin_credits、activity/action 实测（CN 侧接口）",
     action: "每账号独立派生设备槽；仅对可领取活动发起领奖",
+    cnOnly: true,
   },
   {
     code: "040012 (TokenInvalid)",
@@ -722,8 +724,8 @@ export function AssetsPage({
   const { sources, dollar } = packsToSources(entitlement);
   const acts = collectActivities(activity);
   const grantable = acts.filter((a) => a.grantable && !a.granted);
-  // 国际版无活动中心（后端已跳过请求），UI 需据此说明并禁用领奖入口
-  const activitySupported = bundle?.activitySupported ?? targetIde === "trae-cn";
+  // 活动中心（签到/活动奖励）为 CN 专有：国际版整块不展示，避免出现用不到的入口
+  const isCn = targetIde === "trae-cn";
   const billingRoot = obj(billing);
   const billingList = billingRoot && Array.isArray(billingRoot.data_list) ? billingRoot.data_list : [];
   const prodRoot = obj(products);
@@ -746,7 +748,9 @@ export function AssetsPage({
         >
           {targetIde === "trae" ? "Trae 国际版" : "Trae CN"}
         </span>
-        <span className="text-[12px] text-ink3 ml-3">积分、会话用量、活动奖励、订阅能力、设备身份</span>
+        <span className="text-[12px] text-ink3 ml-3">
+          {isCn ? "积分、会话用量、活动奖励、订阅能力、设备身份" : "额度、会话用量、订阅能力、设备身份"}
+        </span>
       </div>
 
       <div className="flex items-center gap-2.5 mb-4">
@@ -761,18 +765,16 @@ export function AssetsPage({
         <button className="btn-ghost" disabled={!id || refreshing} onClick={load} title="重新读取该账号数据（后台自动读取）">
           <IconRefresh /> {refreshing ? "刷新中…" : "刷新"}
         </button>
-        <button
-          className="btn-primary"
-          disabled={!id || claiming || !activitySupported}
-          onClick={claim}
-          title={
-            activitySupported
-              ? "通过 Trae 自带入口领取奖励（需 Trae 处于运行中，且已安装无感换号支持）"
-              : "国际版无活动中心（签到和奖励活动仅 Trae CN 提供）"
-          }
-        >
-          {claiming ? "领取中…" : `一键领取活动奖励${grantable.length ? `（${grantable.length}）` : ""}`}
-        </button>
+        {isCn && (
+          <button
+            className="btn-primary"
+            disabled={!id || claiming}
+            onClick={claim}
+            title="通过 Trae 自带入口领取奖励（需 Trae 处于运行中，且已安装无感换号支持）"
+          >
+            {claiming ? "领取中…" : `一键领取活动奖励${grantable.length ? `（${grantable.length}）` : ""}`}
+          </button>
+        )}
         <button
           className="btn-ghost"
           disabled={!id || verifying}
@@ -941,18 +943,15 @@ export function AssetsPage({
             )}
           </Section>
 
-          <Section
-            title="活动与奖励"
-            badge={!activitySupported ? "仅 Trae CN 提供" : acts.length ? `${acts.length} 项 · 可领取 ${grantable.length}` : undefined}
-            raw={activity}
-          >
-            {!activitySupported ? (
-              <div className="text-[11.5px] text-ink3">
-                国际版无活动中心 —— 签到和活动奖励仅 Trae CN 提供；本页的积分、订阅能力等内容不受影响，可正常使用。
-              </div>
-            ) : acts.length === 0 ? (
-              <div className="text-[11.5px] text-ink3">未读取到活动信息</div>
-            ) : (
+          {isCn && (
+            <Section
+              title="活动与奖励"
+              badge={acts.length ? `${acts.length} 项 · 可领取 ${grantable.length}` : undefined}
+              raw={activity}
+            >
+              {acts.length === 0 ? (
+                <div className="text-[11.5px] text-ink3">未读取到活动信息</div>
+              ) : (
               <div className="flex flex-col gap-2">
                 {acts.map((a, i) => {
                   const meta = ACTIVITIES[a.id] ?? { name: a.id || "活动", note: "" };
@@ -984,8 +983,9 @@ export function AssetsPage({
                   );
                 })}
               </div>
-            )}
-          </Section>
+              )}
+            </Section>
+          )}
 
           <Section title="订阅能力" badge={prodList.length ? `${prodList.length} 个产品` : undefined} raw={products}>
             {prodList.length === 0 ? (
@@ -1179,7 +1179,11 @@ export function AssetsPage({
                     </div>
                     <div className="grid grid-cols-2 gap-3 mt-2">
                       <DeviceCell label="生效 account 主机（付费/续期）" value={cfg.effectiveAccountHost} hint="product.json 解析" />
-                      <DeviceCell label="生效 ug 主机（签到/活动）" value={cfg.effectiveUgHost} hint="与 account 表不同" />
+                      <DeviceCell
+                        label={isCn ? "生效 ug 主机（签到/活动）" : "生效 ug 主机"}
+                        value={cfg.effectiveUgHost}
+                        hint="与 account 表不同"
+                      />
                     </div>
                     <div className="grid grid-cols-2 gap-3 mt-2">
                       <HostTable title="account 主机表" hosts={cfg.accountHosts} />
@@ -1277,7 +1281,7 @@ export function AssetsPage({
 
               <Section title="错误码字典">
                 <div className="flex flex-col">
-                  {ERROR_CODES.map((e) => (
+                  {ERROR_CODES.filter((e) => isCn || !e.cnOnly).map((e) => (
                     <div key={e.code} className="flex gap-3 py-2 border-b border-line-soft last:border-b-0">
                       <div className="w-[168px] flex-none font-mono text-[11px] text-bad">{e.code}</div>
                       <div className="min-w-0 flex-1">
