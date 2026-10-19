@@ -124,12 +124,11 @@ export function IconClose({ className = "w-3.5 h-3.5" }: IconProps) {
 export function IconLogo({ className = "w-6 h-6" }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none">
-      <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#logo-grad)" />
-      {/* 与 App 图标同一套“粗体 T 字标” */}
-      <g stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" fill="none">
-        <path d="M7.6 8.4 H16.4" />
-        <path d="M12 8.4 V16.2" />
-      </g>
+      <rect x="2" y="2" width="20" height="20" rx="5.6" fill="url(#logo-grad)" />
+      {/* 与 App 图标同源：白色圆盘 + T 形（横杠两端尖角、竖笔底部尖角） */}
+      <circle cx="12" cy="12" r="7.9" fill="#fff" />
+      <path d="M6.52 7.92 L8.16 6.61 H16.03 L17.67 7.92 L16.03 9.23 H8.16 Z" fill="#12a597" />
+      <path d="M10.5 6.61 H13.88 V15.8 L12.19 17.02 L10.5 15.8 Z" fill="#12a597" />
       <defs>
         <linearGradient id="logo-grad" x1="2" y1="2" x2="22" y2="22">
           <stop stopColor="#0b8f83" />
