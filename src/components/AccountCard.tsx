@@ -213,7 +213,7 @@ export function AccountCard({
 
   return (
     <div
-      className={`lift relative bg-card border rounded-[12px] p-4 shadow-card ${
+      className={`lift relative h-full flex flex-col bg-card border rounded-[12px] p-4 shadow-card ${
         current ? "border-accent shadow-[0_0_0_2px_var(--color-accent-soft),var(--shadow-card)]" : "border-line"
       }`}
     >
@@ -326,26 +326,28 @@ export function AccountCard({
         </>
       )}
 
-      <div className="text-[10.5px] text-ink3 mt-2.5">
-        {account.credits ? "按积分计算，不同模型消耗不同" : account.resetText}
-      </div>
+      <div className="mt-auto pt-2.5">
+        <div className="text-[10.5px] text-ink3">
+          {account.credits ? "按积分计算，不同模型消耗不同" : account.resetText}
+        </div>
 
-      {!current && (
-        <button
-          className="mt-3 w-full h-8 rounded-[9px] border border-line bg-white text-[11.5px] text-ink2 cursor-pointer hover:border-accent hover:text-accent disabled:opacity-60 disabled:cursor-default"
-          disabled={switching}
-          onClick={() => onSwitch(account.id)}
-        >
-          {switching ? (
-            <span className="flex items-center justify-center gap-1.5">
-              <span className="w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
-              切换中…
-            </span>
-          ) : (
-            "切换到此账号"
-          )}
-        </button>
-      )}
+        {!current && (
+          <button
+            className="mt-3 w-full h-8 rounded-[9px] border border-line bg-white text-[11.5px] text-ink2 cursor-pointer hover:border-accent hover:text-accent disabled:opacity-60 disabled:cursor-default"
+            disabled={switching}
+            onClick={() => onSwitch(account.id)}
+          >
+            {switching ? (
+              <span className="flex items-center justify-center gap-1.5">
+                <span className="w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+                切换中…
+              </span>
+            ) : (
+              "切换到此账号"
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
