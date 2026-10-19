@@ -29,6 +29,12 @@ export interface PackQuota {
   credits_limit: number;
   credits_used: number;
   credits_unlimited: boolean;
+  /** 国际版：无赠送额度（IDE 侧不展示赠送额度行） */
+  no_bonus_quota: boolean;
+  /** 国际版：额度以美元计 */
+  is_dollar_billing: boolean;
+  /** 结算周期结束时刻（秒），额度重置基准 */
+  end_time: number;
   expire_time: string;
 }
 

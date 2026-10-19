@@ -213,10 +213,19 @@ function collectActivities(v: unknown): ActivityNode[] {
 
 type CreditSource = NonNullable<Account["credits"]>["sources"][number];
 
-/** 权益包 → 积分来源（与账号卡片同构，交给 groupSources 合并同类） */
-function packsToSources(v: unknown): CreditSource[] {
+/** 权益包 → 额度来源：CN 取积分（credits），国际版取基础额度（basic）与赠送额度（bonus）。
+ *  dollar = is_dollar_usage_billing，为真时数值以美元计。 */
+function packsToSources(v: unknown): { sources: CreditSource[]; dollar: boolean } {
   const root = obj(v);
   const list = root && Array.isArray(root.user_entitlement_pack_list) ? root.user_entitlement_pack_list : [];
+  const dollar = root?.is_dollar_usage_billing === true;
+  // 国际版 credits_* 恒为 0：任一包带积分才按积分口径渲染
+  const creditsBased = list.some((it) => {
+    const p = obj(it);
+    if (!p) return false;
+    const quota = obj(obj(p.entitlement_base_info)?.quota);
+    return !!quota && (num(quota.credits_limit) !== 0 || num(obj(p.usage)?.credits_amount) !== 0);
+  });
   const out: CreditSource[] = [];
   for (const it of list) {
     const p = obj(it);
@@ -225,25 +234,56 @@ function packsToSources(v: unknown): CreditSource[] {
     const quota = info ? obj(info.quota) : null;
     const usage = obj(p.usage);
     if (!quota) continue;
-    const limit = num(quota.credits_limit);
-    const used = num(usage?.credits_amount);
-    const unlimited = limit === -1;
+    const endTime = info ? num(info.end_time) : 0;
+    const packExpire = num(p.expire_time);
+    // expire_time 为 0/缺失时回落结算周期结束时刻（国际版该字段恒为 0，直接取会显示 1970/1/1）
+    const expire = packExpire > 0 ? String(packExpire) : endTime > 0 ? String(endTime) : "";
+    if (creditsBased) {
+      const limit = num(quota.credits_limit);
+      const used = num(usage?.credits_amount);
+      const unlimited = limit === -1;
+      out.push({
+        desc: str(p.display_desc) || "订阅权益",
+        remaining: unlimited ? 0 : Math.max(limit - used, 0),
+        used,
+        limit,
+        unlimited,
+        expire,
+      });
+      continue;
+    }
+    // 国际版：基础额度始终展示；no_bonus_quota=true 表示无赠送额度（IDE 侧同样不展示）
+    const basicUsed = num(usage?.basic_usage_amount);
+    const basicLimit = num(quota.basic_usage_limit);
     out.push({
-      desc: str(p.display_desc) || "订阅权益",
-      remaining: unlimited ? 0 : Math.max(limit - used, 0),
-      used,
-      limit,
-      unlimited,
-      expire: str(p.expire_time) || str(info?.end_time),
+      desc: "基础额度",
+      remaining: Math.max(basicLimit - basicUsed, 0),
+      used: basicUsed,
+      limit: basicLimit,
+      unlimited: false,
+      expire,
     });
+    if (quota.no_bonus_quota !== true) {
+      const bonusUsed = num(usage?.bonus_usage_amount);
+      const bonusLimit = num(quota.bonus_usage_limit);
+      out.push({
+        desc: "赠送额度",
+        remaining: Math.max(bonusLimit - bonusUsed, 0),
+        used: bonusUsed,
+        limit: bonusLimit,
+        unlimited: false,
+        expire,
+      });
+    }
   }
-  return out;
+  return { sources: out, dollar };
 }
 
 /** 积分来源进度条（与账号卡片同款视觉） */
-function CreditBars({ sources }: { sources: CreditSource[] }) {
+function CreditBars({ sources, dollar }: { sources: CreditSource[]; dollar?: boolean }) {
   const groups = groupSources(sources);
   if (groups.length === 0) return null;
+  const money = (v: number) => (dollar ? `$${v.toFixed(2)}` : fmt(v));
   let sumRemain = 0;
   let sumLimit = 0;
   for (const g of groups) {
@@ -255,9 +295,9 @@ function CreditBars({ sources }: { sources: CreditSource[] }) {
   return (
     <>
       <div className="flex items-end gap-2">
-        <b className="text-[26px] leading-none font-bold font-mono">{fmt(sumRemain)}</b>
+        <b className="text-[26px] leading-none font-bold font-mono">{money(sumRemain)}</b>
         <span className="text-[11.5px] text-ink3 pb-[2px]">
-          可用积分 / 共 {fmt(sumLimit)}
+          {dollar ? "可用额度" : "可用积分"} / 共 {money(sumLimit)}
           {groups.some((g) => g.unlimited) && "（另有无限额度）"}
         </span>
       </div>
@@ -286,7 +326,7 @@ function CreditBars({ sources }: { sources: CreditSource[] }) {
                 </span>
                 <span className="flex items-center gap-2 flex-none ml-2">
                   <b className={`font-mono ${!g.unlimited && remainPct <= 0 ? "text-bad" : "text-ink"}`}>
-                    {g.unlimited ? "无限" : `${fmt(g.remaining)} / ${fmt(g.limit)}`}
+                    {g.unlimited ? "无限" : `${money(g.remaining)} / ${money(g.limit)}`}
                   </b>
                   {g.expire && <span className="text-[9.5px] text-ink3">{day(g.expire)} 到期</span>}
                 </span>
@@ -679,7 +719,7 @@ export function AssetsPage({
   const billing = bundle?.data?.billing;
   const products = bundle?.data?.products;
 
-  const sources = packsToSources(entitlement);
+  const { sources, dollar } = packsToSources(entitlement);
   const acts = collectActivities(activity);
   const grantable = acts.filter((a) => a.grantable && !a.granted);
   // 国际版无活动中心（后端已跳过请求），UI 需据此说明并禁用领奖入口
@@ -772,15 +812,17 @@ export function AssetsPage({
         </div>
       ) : (
         <div className="stagger-in flex flex-col gap-3.5">
-          <Section title="我的积分" badge={`账号 ${bundle.name}`} raw={entitlement}>
+          <Section title={dollar ? "我的额度" : "我的积分"} badge={`账号 ${bundle.name}`} raw={entitlement}>
             {sources.length === 0 ? (
-              <div className="text-[11.5px] text-ink3">未读取到积分信息</div>
+              <div className="text-[11.5px] text-ink3">{dollar ? "未读取到额度信息" : "未读取到积分信息"}</div>
             ) : (
               <>
-                <CreditBars sources={sources} />
+                <CreditBars sources={sources} dollar={dollar} />
                 {series.length >= 2 && (
                   <div className="mt-3 pt-3 border-t border-line-soft">
-                    <div className="text-[11px] text-ink3">积分消耗趋势 · 最近 {series.length} 次记录</div>
+                    <div className="text-[11px] text-ink3">
+                      {dollar ? "额度消耗趋势" : "积分消耗趋势"} · 最近 {series.length} 次记录
+                    </div>
                     <Spark data={series} />
                     {(() => {
                       const hasUnlimited = sources.some((s) => s.unlimited);

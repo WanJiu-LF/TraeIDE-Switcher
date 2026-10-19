@@ -216,7 +216,9 @@ fn check_code(v: Value) -> Result<Value, QuotaError> {
 }
 
 /// 单个权益包的额度摘要
-/// 国际版：basic/bonus 为每日/周额度；CN 积分制：credits_* 即积分（可小数，-1=无限）
+/// 国际版：basic/bonus 为基础/赠送额度（is_dollar_usage_billing=true 时以美元计），
+///        no_bonus_quota=true 表示该账号无赠送额度（IDE 侧直接不展示该行）；
+/// CN 积分制：credits_* 即积分（可小数，-1=无限）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PackQuota {
     pub product_type: i64,
@@ -232,10 +234,20 @@ pub struct PackQuota {
     pub credits_used: f64,
     /// credits_limit == -1（无限）
     pub credits_unlimited: bool,
+    /// quota.no_bonus_quota：无赠送额度
+    pub no_bonus_quota: bool,
+    /// is_dollar_usage_billing：额度以美元计（国际版新计费版本）
+    pub is_dollar_billing: bool,
+    /// entitlement_base_info.end_time（结算周期结束时刻，秒）：额度重置时间基准
+    pub end_time: f64,
     pub expire_time: String,
 }
 
 pub fn summarize_ent_usage(v: &Value) -> Vec<PackQuota> {
+    let dollar_billing = v
+        .get("is_dollar_usage_billing")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
     v.get("user_entitlement_pack_list")
         .and_then(|l| l.as_array())
         .map(|packs| {
@@ -265,6 +277,12 @@ pub fn summarize_ent_usage(v: &Value) -> Vec<PackQuota> {
                         credits_limit,
                         credits_used: num(usage, "credits_amount"),
                         credits_unlimited: credits_limit == -1.0,
+                        no_bonus_quota: quota
+                            .get("no_bonus_quota")
+                            .and_then(|b| b.as_bool())
+                            .unwrap_or(false),
+                        is_dollar_billing: dollar_billing,
+                        end_time: num(info, "end_time"),
                         expire_time: p
                             .get("expire_time")
                             .and_then(|t| t.as_str())

@@ -170,9 +170,15 @@ export default function App() {
             sources,
           };
         } else {
-          next.daily = { used: p.basic_used, total: p.basic_limit };
-          next.weekly = { used: p.bonus_used, total: p.bonus_limit };
-          next.resetText = p.expire_time;
+          // 国际版取 product_type=Free(0) 的权益包（与 IDE 侧选择口径一致）：
+          // basic=基础额度、bonus=赠送额度，no_bonus_quota 时无赠送额度
+          const pack = packs.find((q) => q.product_type === 0) ?? p;
+          next.daily = { used: pack.basic_used, total: pack.basic_limit };
+          next.weekly = { used: pack.bonus_used, total: pack.bonus_limit };
+          next.noBonus = pack.no_bonus_quota;
+          next.dollar = pack.is_dollar_billing;
+          next.resetAt = pack.end_time > 0 ? pack.end_time : undefined;
+          next.resetText = "";
         }
         return next;
       }),

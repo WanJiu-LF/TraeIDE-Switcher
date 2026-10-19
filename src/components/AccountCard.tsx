@@ -23,20 +23,42 @@ interface AccountCardProps {
   onClaimCheckin: (id: string) => void;
 }
 
-function QuotaBar({ label, used, total }: { label: string; used: number; total: number }) {
-  const remain = total - used;
+function QuotaBar({
+  label,
+  used,
+  total,
+  dollar,
+}: {
+  label: string;
+  used: number;
+  total: number;
+  dollar?: boolean;
+}) {
+  const remain = Math.max(total - used, 0);
   const pct = total > 0 ? (remain / total) * 100 : 0;
-  const color = pct <= 0 ? "var(--color-bad)" : pct <= 10 ? "var(--color-warn)" : "var(--color-ok)";
+  // 无额度（total<=0）时保持中性色，不判红——0/0 并非"已耗尽"
+  const color =
+    total <= 0
+      ? "var(--color-line)"
+      : pct <= 0
+        ? "var(--color-bad)"
+        : pct <= 10
+          ? "var(--color-warn)"
+          : "var(--color-ok)";
+  const fmt = (v: number) => (dollar ? `$${v.toFixed(2)}` : v.toLocaleString("zh-CN"));
   return (
     <div className="mt-2.5">
       <div className="flex justify-between text-[11px] text-ink2 mb-[5px]">
         <span>{label}</span>
-        <b className="font-mono text-ink">
-          {remain} / {total}
+        <b className={`font-mono ${total > 0 && pct <= 0 ? "text-bad" : "text-ink"}`}>
+          {fmt(remain)} / {fmt(total)}
         </b>
       </div>
       <div className="h-[6px] bg-[#eef3f6] rounded-full overflow-hidden">
-        <div className="bar-fill h-full rounded-full" style={{ width: `${Math.max(pct, 2)}%`, background: color }} />
+        <div
+          className="bar-fill h-full rounded-full"
+          style={{ width: `${total <= 0 ? 0 : Math.max(pct, 2)}%`, background: color }}
+        />
       </div>
     </div>
   );
@@ -48,8 +70,22 @@ const STATUS_BADGE: Record<Account["status"], { text: string; cls: string }> = {
   error: { text: "登录异常", cls: "bg-[#fdeeee] border-[#f6cfcf] text-[#d24545]" },
 };
 
+/** 到期时间归一（epoch 秒/毫秒与 ISO 串都能显示成 YYYY/MM/DD） */
 function expireText(expire: string): string {
-  return expire ? `${expire.slice(0, 10).replace(/-/g, "/")} 到期` : "";
+  if (!expire) return "";
+  const s = expire.trim();
+  const d = /^\d+$/.test(s) ? new Date(Number(s) < 1e11 ? Number(s) * 1000 : Number(s)) : new Date(s);
+  if (isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} 到期`;
+}
+
+/** 国际版结算周期结束时刻（秒）→ "订阅重置 YYYY/MM/DD HH:mm" */
+function resetText(ts?: number): string {
+  if (!ts || ts <= 0) return "";
+  const d = new Date(ts * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `订阅重置 ${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 type CreditSource = NonNullable<Account["credits"]>["sources"][number];
@@ -324,14 +360,17 @@ export function AccountCard({
         <CreditsBlock account={account} claiming={claiming} onClaimCheckin={onClaimCheckin} />
       ) : (
         <>
-          <QuotaBar label="每日额度" used={account.daily.used} total={account.daily.total} />
-          <QuotaBar label="每周额度" used={account.weekly.used} total={account.weekly.total} />
+          {/* 国际版口径：基础额度 basic / 赠送额度 bonus；无赠送额度时不展示该行 */}
+          <QuotaBar label="基础额度" used={account.daily.used} total={account.daily.total} dollar={account.dollar} />
+          {!account.noBonus && (
+            <QuotaBar label="赠送额度" used={account.weekly.used} total={account.weekly.total} dollar={account.dollar} />
+          )}
         </>
       )}
 
       <div className="mt-auto pt-2.5">
         <div className="text-[10.5px] text-ink3">
-          {account.credits ? "按积分计算，不同模型消耗不同" : account.resetText}
+          {account.credits ? "按积分计算，不同模型消耗不同" : resetText(account.resetAt) || account.resetText}
         </div>
 
         {!current && (

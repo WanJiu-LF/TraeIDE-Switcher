@@ -27,6 +27,12 @@ export interface Account {
   daily: Quota;
   weekly: Quota;
   resetText: string;
+  /** 国际版：无赠送额度（隐藏赠送额度行） */
+  noBonus?: boolean;
+  /** 国际版：额度以美元计 */
+  dollar?: boolean;
+  /** 国际版：结算周期结束时刻（秒） */
+  resetAt?: number;
   note: string;
   credits?: {
     total: number;

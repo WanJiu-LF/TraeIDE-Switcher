@@ -132,6 +132,31 @@ export function AccountsPage(props: AccountsPageProps) {
   const poolRemain = isCn
     ? pool.reduce((sum, a) => sum + (a.credits?.total ?? 0), 0)
     : pool.reduce((sum, a) => sum + Math.max(a.daily.total - a.daily.used, 0), 0);
+  // 国际版额度以美元计（is_dollar_usage_billing）时带 $ 前缀，否则按次数
+  const dollar = !isCn && pool.some((a) => a.dollar === true);
+  const fmtRemain = (v: number) =>
+    isCn
+      ? v.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : dollar
+        ? `$${v.toFixed(2)}`
+        : v.toLocaleString("zh-CN");
+  const stamp = (ts: number) => {
+    const d = new Date(ts * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  // 下次额度重置：国际版取最早的订阅周期结束时刻；CN 取最近的活动到期时间
+  const businessExpire = pool
+    .flatMap((a) => a.credits?.sources ?? [])
+    .map((s) => s.expire)
+    .filter(Boolean)
+    .sort()[0];
+  const resetTs = pool.reduce(
+    (min, a) => (a.resetAt && a.resetAt > 0 && (min === 0 || a.resetAt < min) ? a.resetAt : min),
+    0,
+  );
+  const resetValue = isCn ? (businessExpire ? businessExpire.slice(0, 10).replace(/-/g, "/") : "—") : resetTs > 0 ? stamp(resetTs) : "—";
+  const resetSub = isCn ? "积分按活动到期时间失效" : "按订阅周期重置（最早到期账号）";
 
   return (
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
@@ -149,11 +174,9 @@ export function AccountsPage(props: AccountsPageProps) {
           {pool.filter((a) => a.status === "exhausted").length} · 异常 {pool.filter((a) => a.status === "error").length}
         </div>
         <div className="ml-auto text-[11px] text-ink3">
-          {isCn ? "总积分 " : "今日剩余 "}
+          {isCn ? "总积分 " : "剩余额度 "}
           <b className="font-mono text-ink text-[12px]">
-            {isCn
-              ? poolRemain.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-              : `${poolRemain.toLocaleString("zh-CN")} 次`}
+            {isCn || dollar ? fmtRemain(poolRemain) : `${poolRemain.toLocaleString("zh-CN")} 次`}
           </b>
         </div>
       </div>
@@ -169,18 +192,10 @@ export function AccountsPage(props: AccountsPageProps) {
         <StatCard label="账号总数" value={String(pool.length)} sub={`${isCn ? "Trae CN" : "Trae"} 账号`} />
         <StatCard
           label="剩余总量"
-          value={
-            isCn
-              ? `${poolRemain.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 积分`
-              : `${poolRemain.toLocaleString("zh-CN")} 次`
-          }
-          sub={isCn ? "全部 CN 账号积分合计" : "全部账号今日剩余额度合计"}
+          value={isCn ? `${fmtRemain(poolRemain)} 积分` : dollar ? fmtRemain(poolRemain) : `${poolRemain.toLocaleString("zh-CN")} 次`}
+          sub={isCn ? "全部 CN 账号积分合计" : "全部账号基础额度合计"}
         />
-        <StatCard
-          label="下次额度重置"
-          value="06:12:44"
-          sub={targetIde === "trae" ? "每日 00:00 重置" : "积分不过期，按活动到期"}
-        />
+        <StatCard label="下次额度重置" value={resetValue} sub={resetSub} />
       </div>
 
       {/* 筛选行：整行占满（搜索框 flex-1 吸收全部剩余宽度，行尾齐平右边界），
