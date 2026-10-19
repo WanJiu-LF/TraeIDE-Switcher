@@ -72,7 +72,7 @@ IDE 未运行或补丁不可用时，执行完整切换：终止 Trae 进程 →
 - 运行环境：Microsoft Edge WebView2（Windows 11 及多数 Windows 10 已内置）
 - 权限：使用无感换号支持文件时需要管理员身份运行本软件，并先关闭 Trae
 
-安装：从 [GitHub 发布页](https://github.com/WanJiu-LF/TraeIDE-Switcher-releases/releases) 下载 `TraeIDE-Switcher_x.y.z_x64-setup.exe` 并安装。应用内「关于」页可检查更新。
+安装：从本仓库的 [Releases 页面](https://github.com/WanJiu-LF/TraeIDE-Switcher/releases) 下载 `TraeIDE-Switcher_x.y.z_x64-setup.exe` 并安装。应用内「关于」页可检查更新。
 
 ## 使用流程
 
@@ -87,8 +87,8 @@ IDE 未运行或补丁不可用时，执行完整切换：终止 Trae 进程 →
 
 ## 自动更新链路
 
-- 应用内：在「关于」页点击「检查更新」，从 GitHub 发布页拉取 `latest.json` 校验并安装，安装后重启应用。
-- 发布产物：安装包（NSIS）与更新描述文件 `latest.json` 由 `npm run release` 一键生成并发布至产物仓库（需保持仓库为 public，否则客户端无法匿名拉取）。
+- 应用内：在「关于」页点击「检查更新」，从本仓库发布页拉取 `latest.json` 校验并安装，安装后重启应用。
+- 发布产物：安装包（NSIS）与更新描述文件 `latest.json` 由 `npm run release` 一键生成并发布至本仓库的 Releases。更新端点指向 `releases/latest/download/latest.json`，因此每个正式 Release 都必须包含 `latest.json` 与 `setup.exe`（含 `.sig`），否则客户端自动更新会失效。
 
 发布前需先关闭运行中的换号器，并同时提升 `src-tauri/tauri.conf.json` 与 `package.json` 的版本号。
 
@@ -169,7 +169,7 @@ Trae 升级会覆盖安装目录下的补丁文件，需重新安装无感换号
 本工具不修改 AI Agent 数据库的密钥来源，切换前后均备份并恢复对话数据库。若异常，请确认未手工改动 `state.vscdb`。
 
 **应用内「检查更新」报错**
-请确认产物仓库为 public，且当前网络可访问 GitHub 发布页。
+请确认本仓库为公开仓库，且当前网络可访问 GitHub 发布页。
 
 ## 免责声明
 

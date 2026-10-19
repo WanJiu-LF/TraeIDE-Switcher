@@ -1,13 +1,15 @@
-// 一键发布：本地构建（含 NSIS 签名产物）→ 生成 latest.json → 发布到自动更新产物仓库
+// 一键发布：本地构建（含 NSIS 签名产物）→ 生成 latest.json → 发布到源码仓库的 Releases
 // 用法：npm run release            （本次更新说明用最近提交信息或默认文案）
 //      npm run release -- --notes "本次修复说明"
+// 注意：更新端点为 <仓库>/releases/latest/download/latest.json，因此源码仓库的每个正式
+//      Release 都必须带上 latest.json + setup.exe + .sig，否则客户端自动更新会 404。
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const RELEASE_REPO = "WanJiu-LF/TraeIDE-Switcher-releases";
+const RELEASE_REPO = "WanJiu-LF/TraeIDE-Switcher";
 const KEY_FILE = join(root, "src-tauri", "keys", "updater.key");
 
 const die = (msg) => {
