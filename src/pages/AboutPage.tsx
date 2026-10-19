@@ -1,5 +1,7 @@
+import { useState } from "react";
+
 interface AboutPageProps {
-  onCheckUpdate: () => void;
+  onCheckUpdate: () => Promise<void> | void;
 }
 
 const CREDITS = [
@@ -10,6 +12,18 @@ const CREDITS = [
 ];
 
 export function AboutPage({ onCheckUpdate }: AboutPageProps) {
+  // 检查更新耗时（网络往返/下载校验）可能数秒：给出明确进行中状态，避免点击后无任何反馈
+  const [checking, setChecking] = useState(false);
+  const run = async () => {
+    if (checking) return;
+    setChecking(true);
+    try {
+      await onCheckUpdate();
+    } finally {
+      setChecking(false);
+    }
+  };
+
   return (
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
       <div className="flex items-center mb-[18px]">
@@ -30,8 +44,8 @@ export function AboutPage({ onCheckUpdate }: AboutPageProps) {
               <div className="text-[11px] text-ink3">当前版本</div>
               <div className="font-mono text-[13.5px] font-semibold">v0.1.0</div>
             </div>
-            <button className="btn-primary" onClick={onCheckUpdate}>
-              检查更新
+            <button className="btn-primary disabled:opacity-50" disabled={checking} onClick={() => void run()}>
+              {checking ? "检查中…" : "检查更新"}
             </button>
           </div>
         </div>

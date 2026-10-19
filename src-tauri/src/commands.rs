@@ -496,6 +496,8 @@ fn session_usage_impl(ide: &str) -> CmdResult<String> {
 
     let mut rows = Vec::new();
     let mut errors = Vec::new();
+    // 按模型累计（消息体 model 字段名在不同版本间有差异，按优先级兜底取值）
+    let mut models: std::collections::BTreeMap<String, ModelAgg> = std::collections::BTreeMap::new();
     for s in sessions.iter().take(SESSION_USAGE_MAX) {
         let sid = s.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
         if sid.is_empty() {
@@ -558,14 +560,31 @@ fn session_usage_impl(ide: &str) -> CmdResult<String> {
                 };
                 let prompt = pick(&["prompt_tokens", "input"]);
                 let completion = pick(&["completion_tokens", "output"]);
+                let total = pick(&["total_tokens"]).max(prompt + completion);
                 agg.prompt += prompt;
                 agg.completion += completion;
-                agg.total += pick(&["total_tokens"]).max(prompt + completion);
+                agg.total += total;
                 agg.cache_read += pick(&["cache_read_input_tokens"]);
                 agg.cache_create += pick(&["cache_creation_input_tokens"]);
                 agg.reasoning += pick(&["reasoning_tokens"]);
                 agg.turns += 1;
                 used += 1;
+                // 模型名：真实字段在 user_message_context.model_info（真机日志核对），
+                // 助手轮次另有 model_smart_selection_meta.config_name；均无则归入“未知模型”
+                let model = m
+                    .pointer("/user_message_context/model_info/display_model_name")
+                    .or_else(|| m.pointer("/user_message_context/model_info/model_name"))
+                    .or_else(|| m.pointer("/model_smart_selection_meta/config_name"))
+                    .or_else(|| m.pointer("/model_smart_selection_meta/display_model_name"))
+                    .or_else(|| m.get("model_name"))
+                    .or_else(|| m.get("modelName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let e = models.entry(model.to_string()).or_default();
+                e.turns += 1;
+                e.prompt += prompt;
+                e.completion += completion;
+                e.total += total;
                 let last_total = pick(&["last_turn_total_tokens"]);
                 if last_total > 0.0 {
                     agg.last_turn_total = last_total;
@@ -598,13 +617,42 @@ fn session_usage_impl(ide: &str) -> CmdResult<String> {
         crate::core::logger::Source::Quota,
         format!("会话用量：已聚合 {} 个会话（共 {} 个）", rows.len(), total.unwrap_or(0)),
     );
+    let mut model_rows: Vec<Value> = models
+        .into_iter()
+        .map(|(name, a)| {
+            json!({
+                "name": if name.is_empty() { "未知模型" } else { name.as_str() },
+                "turns": a.turns,
+                "promptTokens": a.prompt,
+                "completionTokens": a.completion,
+                "totalTokens": a.total,
+            })
+        })
+        .collect();
+    model_rows.sort_by(|a, b| {
+        b["totalTokens"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .partial_cmp(&a["totalTokens"].as_f64().unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(json!({
         "sessions": rows,
         "totalCount": total.unwrap_or(0),
         "projectId": project_id,
+        "models": model_rows,
         "errors": errors,
     })
     .to_string())
+}
+
+/// 单模型用量累计（按模型汇总本轮拉取到的全部会话）
+#[derive(Default)]
+struct ModelAgg {
+    turns: usize,
+    prompt: f64,
+    completion: f64,
+    total: f64,
 }
 
 /// 单会话用量聚合中间态

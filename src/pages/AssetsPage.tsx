@@ -927,6 +927,37 @@ export function AssetsPage({
                   这些会话属于项目 <span className="font-mono">{usage.projectId || "—"}</span>
                   {usage.totalCount > usageRows.length && `（仅列出最近 ${usageRows.length} 个）`}。
                 </div>
+                {usage.models.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-line-soft">
+                    <div className="text-[11px] text-ink3 mb-1.5">按模型累计</div>
+                    <div className="border border-line-soft rounded-[10px] overflow-hidden">
+                      <div className="flex items-center gap-3 px-3 py-2 bg-[#fbfdfe] text-[10.5px] text-ink3">
+                        <span className="flex-1">模型</span>
+                        <span className="w-[46px] flex-none text-right">轮次</span>
+                        <span className="w-[92px] flex-none text-right">输入</span>
+                        <span className="w-[92px] flex-none text-right">输出</span>
+                        <span className="w-[100px] flex-none text-right">合计</span>
+                      </div>
+                      {usage.models.map((m) => (
+                        <div key={m.name} className="flex items-center gap-3 px-3 py-2 border-t border-line-soft">
+                          <span className="flex-1 text-[11.5px] text-ink truncate" title={m.name}>
+                            {m.name}
+                          </span>
+                          <span className="w-[46px] flex-none text-right font-mono text-[11px] text-ink2">{m.turns}</span>
+                          <span className="w-[92px] flex-none text-right font-mono text-[11px] text-ink2">
+                            {fmt(m.promptTokens)}
+                          </span>
+                          <span className="w-[92px] flex-none text-right font-mono text-[11px] text-ink2">
+                            {fmt(m.completionTokens)}
+                          </span>
+                          <span className="w-[100px] flex-none text-right font-mono text-[11.5px] font-semibold text-ink">
+                            {fmt(m.totalTokens)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {usage.errors.length > 0 && (
                   <div className="text-[11px] text-bad mt-1">
                     未读取到的会话：{usage.errors.map((e) => e.sessionId).join("、")}

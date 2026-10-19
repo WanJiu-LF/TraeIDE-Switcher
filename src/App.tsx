@@ -706,7 +706,11 @@ export default function App() {
             onCheckUpdate={async () => {
               try {
                 const { check } = await import("@tauri-apps/plugin-updater");
-                const update = await check();
+                // 显式限时：插件自身无超时，链路半开时会出现"点击后长时间无任何反馈"
+                const update = await Promise.race([
+                  check(),
+                  new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000)),
+                ]);
                 if (!update) {
                   pushToast("info", "已是最新版本", "当前 v0.1.0");
                   return;
@@ -717,7 +721,12 @@ export default function App() {
                 const { relaunch } = await import("@tauri-apps/plugin-process");
                 await relaunch();
               } catch (e) {
-                pushToast("error", "检查更新失败，请检查网络后重试", errText(e));
+                const timedOut = errText(e) === "timeout";
+                pushToast(
+                  "error",
+                  timedOut ? "检查更新超时，请检查网络后重试" : "检查更新失败，请检查网络后重试",
+                  timedOut ? undefined : errText(e),
+                );
               }
             }}
           />

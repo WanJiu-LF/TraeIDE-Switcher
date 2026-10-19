@@ -254,19 +254,30 @@ export interface SessionUsageRow {
   truncated: boolean;
 }
 
+/** 单模型用量累计（本轮拉取到的全部会话按模型汇总） */
+export interface ModelUsageRow {
+  name: string;
+  turns: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 export interface SessionUsage {
   sessions: SessionUsageRow[];
   /** 服务端会话总数 */
   totalCount: number;
   /** 会话所属 project（补丁固定后为账号共享 project） */
   projectId: string;
+  /** 按模型汇总的用量 */
+  models: ModelUsageRow[];
   /** 单个会话拉取失败的明细 */
   errors: { sessionId: string; error: string }[];
 }
 
 /** 会话级用量明细：需 Trae 运行中 + shim 已激活 + 补丁已注入并重启生效 */
 export async function sessionUsage(ide: Ide): Promise<SessionUsage> {
-  if (!isTauri()) return { sessions: [], totalCount: 0, projectId: "", errors: [] };
+  if (!isTauri()) return { sessions: [], totalCount: 0, projectId: "", models: [], errors: [] };
   return JSON.parse(await invoke<string>("session_usage", { ide })) as SessionUsage;
 }
 
