@@ -1,0 +1,37 @@
+[package]
+name = "traeide-switcher"
+version = "0.1.0"
+description = "TraeIDE-Switcher — Trae / Trae CN 多账号切换器"
+edition = "2021"
+
+[lib]
+name = "traeide_switcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sha1 = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+base64 = "0.22"
+rand = "0.8"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+winreg = "0.55"
+ureq = { version = "2", features = ["json"] }
+tungstenite = "0.24"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

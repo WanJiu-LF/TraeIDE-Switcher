@@ -1,0 +1,351 @@
+import { useState } from "react";
+import type { Account } from "../types";
+
+interface AccountCardProps {
+  account: Account;
+  current: boolean;
+  switching: boolean;
+  claiming?: boolean;
+  /** P0-2 批量模式：显示勾选框 */
+  batchMode?: boolean;
+  selected?: boolean;
+  onSelect?: (id: string) => void;
+  /** P0-6 置顶 */
+  onPin?: (id: string, pinned: boolean) => void;
+  /** P0-4 重新登录采集 */
+  onRelogin?: () => void;
+  /** 多开：独立 user-data 实例启动该账号 */
+  onLaunchIsolated?: (id: string) => void;
+  onSwitch: (id: string) => void;
+  onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
+  onRefresh: (id: string) => void;
+  onClaimCheckin: (id: string) => void;
+}
+
+function QuotaBar({ label, used, total }: { label: string; used: number; total: number }) {
+  const remain = total - used;
+  const pct = total > 0 ? (remain / total) * 100 : 0;
+  const color = pct <= 0 ? "var(--color-bad)" : pct <= 10 ? "var(--color-warn)" : "var(--color-ok)";
+  return (
+    <div className="mt-2.5">
+      <div className="flex justify-between text-[11px] text-ink2 mb-[5px]">
+        <span>{label}</span>
+        <b className="font-mono text-ink">
+          {remain} / {total}
+        </b>
+      </div>
+      <div className="h-[6px] bg-[#eef3f6] rounded-full overflow-hidden">
+        <div className="bar-fill h-full rounded-full" style={{ width: `${Math.max(pct, 2)}%`, background: color }} />
+      </div>
+    </div>
+  );
+}
+
+const STATUS_BADGE: Record<Account["status"], { text: string; cls: string }> = {
+  normal: { text: "正常", cls: "bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]" },
+  exhausted: { text: "额度耗尽", cls: "bg-[#fdeeee] border-[#f6cfcf] text-[#d24545]" },
+  error: { text: "登录异常", cls: "bg-[#fdeeee] border-[#f6cfcf] text-[#d24545]" },
+};
+
+function expireText(expire: string): string {
+  return expire ? `${expire.slice(0, 10).replace(/-/g, "/")} 到期` : "";
+}
+
+type CreditSource = NonNullable<Account["credits"]>["sources"][number];
+
+export interface SourceGroup {
+  desc: string;
+  remaining: number;
+  used: number;
+  limit: number;
+  unlimited: boolean;
+  expire: string;
+  count: number;
+}
+
+/** 合并同类积分来源（同名多笔 → 一行），按剩余倒序。增值页复用同一口径。 */
+export function groupSources(sources: CreditSource[]): SourceGroup[] {
+  const map = new Map<string, SourceGroup>();
+  for (const s of sources) {
+    const g = map.get(s.desc);
+    if (g) {
+      g.remaining += s.remaining;
+      g.used += s.used;
+      g.limit += s.limit;
+      g.unlimited = g.unlimited || s.unlimited;
+      g.count += 1;
+      if (s.expire && (!g.expire || s.expire < g.expire)) g.expire = s.expire;
+    } else {
+      map.set(s.desc, {
+        desc: s.desc,
+        remaining: s.remaining,
+        used: s.used,
+        limit: s.limit,
+        unlimited: s.unlimited,
+        expire: s.expire,
+        count: 1,
+      });
+    }
+  }
+  return [...map.values()]
+    .filter((g) => !(g.limit === 0 && g.used === 0 && !g.unlimited))
+    .sort((a, b) => b.remaining - a.remaining);
+}
+
+const MAX_SOURCE_ROWS = 6;
+
+function CreditsBlock({ account, claiming, onClaimCheckin }: { account: Account; claiming?: boolean; onClaimCheckin: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const credits = account.credits;
+  if (!credits) return null;
+  const hasUnlimited = credits.sources.some((s) => s.unlimited);
+  const groups = groupSources(credits.sources);
+  const shown = expanded ? groups : groups.slice(0, MAX_SOURCE_ROWS);
+  return (
+    <div className="mt-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-ink2">总可用积分</span>
+        {account.checkin &&
+          (account.checkin.checked ? (
+            <span
+              title="今日已签到"
+              className="text-[10px] px-2 py-0.5 rounded-full border bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]"
+            >
+              今日已签到
+            </span>
+          ) : (
+            <button
+              title={`今日签到可得 ${account.checkin.reward} 积分`}
+              disabled={claiming}
+              onClick={() => onClaimCheckin(account.id)}
+              className="text-[10px] px-2 py-0.5 rounded-full border bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a] cursor-pointer hover:bg-[#ffe9d2] disabled:opacity-60"
+            >
+              {claiming ? "签到中…" : "一键签到"}
+            </button>
+          ))}
+      </div>
+      <div className="flex items-center gap-1.5 mt-[2px]">
+        <b className="text-[23px] leading-tight font-bold font-mono">
+          {credits.total.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </b>
+        {hasUnlimited && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]">
+            含无限额度
+          </span>
+        )}
+      </div>
+      {shown.map((g) => {
+        const remainPct = g.limit > 0 ? (g.remaining / g.limit) * 100 : 0;
+        const color = g.unlimited
+          ? "var(--color-accent)"
+          : remainPct <= 0
+            ? "var(--color-bad)"
+            : remainPct <= 10
+              ? "var(--color-warn)"
+              : "var(--color-ok)";
+        return (
+          <div key={g.desc} className="mt-2">
+            <div className="flex items-center justify-between text-[11px] text-ink2 mb-[5px]">
+              <span className="truncate">
+                {g.desc}
+                {g.count > 1 && <span className="text-[9.5px] text-ink3 ml-1">共 {g.count} 项</span>}
+              </span>
+              <span className="flex items-center gap-1.5 flex-none ml-2">
+                <b className={`font-mono ${!g.unlimited && remainPct <= 0 ? "text-bad" : "text-ink"}`}>
+                  {g.unlimited ? "无限" : `${g.remaining.toLocaleString("zh-CN")} / ${g.limit.toLocaleString("zh-CN")}`}
+                </b>
+                {g.expire && <span className="text-[9.5px] text-ink3">{expireText(g.expire)}</span>}
+              </span>
+            </div>
+            <div className="h-[4px] bg-[#eef3f6] rounded-full overflow-hidden">
+              <div
+                className="bar-fill h-full rounded-full"
+                style={{
+                  width: `${g.unlimited ? 100 : remainPct <= 0 ? 0 : Math.max(remainPct, 2)}%`,
+                  background: color,
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
+      {groups.length > MAX_SOURCE_ROWS && (
+        <button
+          className="w-full mt-2 text-[10.5px] text-ink3 hover:text-accent cursor-pointer"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "收起" : `还有 ${groups.length - MAX_SOURCE_ROWS} 项`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function AccountCard({
+  account,
+  current,
+  switching,
+  claiming,
+  batchMode,
+  selected,
+  onSelect,
+  onPin,
+  onRelogin,
+  onLaunchIsolated,
+  onSwitch,
+  onEdit,
+  onDelete,
+  onRefresh,
+  onClaimCheckin,
+}: AccountCardProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const menuItems: { label: string; action: () => void; danger?: boolean }[] = [
+    { label: account.pinned ? "取消置顶" : "置顶显示", action: () => onPin?.(account.id, !account.pinned) },
+    { label: "切换到此账号", action: () => onSwitch(account.id) },
+    { label: "多开（独立实例）", action: () => onLaunchIsolated?.(account.id) },
+    { label: "重新登录并保存", action: () => onRelogin?.() },
+    { label: "刷新额度", action: () => onRefresh(account.id) },
+    { label: "编辑", action: () => onEdit(account.id) },
+    { label: "删除", action: () => onDelete(account.id), danger: true },
+  ];
+
+  return (
+    <div
+      className={`lift relative bg-card border rounded-[12px] p-4 shadow-card ${
+        current ? "border-accent shadow-[0_0_0_2px_var(--color-accent-soft),var(--shadow-card)]" : "border-line"
+      }`}
+    >
+      {current && (
+        <div className="absolute -top-[9px] right-3 bg-accent text-white text-[10px] px-2.5 py-0.5 rounded-full font-semibold">
+          使用中
+        </div>
+      )}
+
+      <div className="flex items-center gap-2.5 mb-3">
+        {batchMode && (
+          <button
+            className={`w-[18px] h-[18px] flex-none rounded-[5px] border flex items-center justify-center text-[11px] cursor-pointer ${
+              selected ? "bg-accent border-accent text-white" : "border-line bg-white text-transparent"
+            }`}
+            onClick={() => onSelect?.(account.id)}
+            title={selected ? "取消选择" : "选择该账号"}
+          >
+            ✓
+          </button>
+        )}
+        <div
+          className="w-[38px] h-[38px] rounded-[11px] flex-none flex items-center justify-center text-[15px] font-bold text-white"
+          style={{ background: account.color }}
+        >
+          {account.initial}
+        </div>
+        <div className="min-w-0">
+          <div className="text-[13.5px] font-semibold truncate">{account.name}</div>
+          <div className="text-[11px] text-ink3 truncate">{account.email}</div>
+        </div>
+        <div className="relative ml-auto">
+          <button
+            className="w-7 h-7 rounded-md text-ink3 hover:bg-[#f0f6f7] cursor-pointer text-[15px] leading-none"
+            onClick={() => setMenuOpen((v) => !v)}
+            title="更多操作"
+          >
+            ···
+          </button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-8 z-20 w-[140px] bg-card border border-line rounded-[10px] shadow-soft py-1.5">
+                {menuItems.map((m) => (
+                  <button
+                    key={m.label}
+                    className={`w-full text-left px-3.5 py-[7px] text-[12px] cursor-pointer hover:bg-[#f0f6f7] ${
+                      m.danger ? "text-bad" : "text-ink2"
+                    }`}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      m.action();
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="flex gap-1.5 flex-wrap mb-1">
+        <span
+          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${
+            account.plan === "pro" ? "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" : "bg-[#fbfdfe] border-line text-ink2"
+          }`}
+        >
+          {account.plan === "pro" ? "Pro" : "免费版"}
+        </span>
+        <span
+          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${
+            account.ide === "trae-cn" ? "bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a]" : "bg-[#fbfdfe] border-line text-ink2"
+          }`}
+        >
+          {account.ide === "trae-cn" ? "Trae CN" : "Trae"}
+        </span>
+        <span
+          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${STATUS_BADGE[account.status].cls}`}
+          title={account.errorText}
+        >
+          {STATUS_BADGE[account.status].text}
+        </span>
+        {account.threshold != null && (
+          <span
+            className="text-[10.5px] px-2 py-0.5 rounded-full border bg-[#fbfdfe] border-line text-ink2"
+            title="该账号独立设置：剩余额度低于此百分比时自动换号"
+          >
+            低于 {account.threshold}% 自动换号
+          </span>
+        )}
+      </div>
+
+      {account.errorText && (
+        <div
+          className="mt-2 text-[10.5px] text-bad bg-[#fdeeee] border border-[#f6cfcf] rounded-[8px] px-2 py-1.5 leading-snug break-all"
+          title={account.errorText}
+        >
+          额度查询失败，可稍后使用“刷新额度”重试：{account.errorText.length > 180 ? `${account.errorText.slice(0, 180)}…` : account.errorText}
+        </div>
+      )}
+
+      {account.credits ? (
+        <CreditsBlock account={account} claiming={claiming} onClaimCheckin={onClaimCheckin} />
+      ) : (
+        <>
+          <QuotaBar label="每日额度" used={account.daily.used} total={account.daily.total} />
+          <QuotaBar label="每周额度" used={account.weekly.used} total={account.weekly.total} />
+        </>
+      )}
+
+      <div className="text-[10.5px] text-ink3 mt-2.5">
+        {account.credits ? "按积分计算，不同模型消耗不同" : account.resetText}
+      </div>
+
+      {!current && (
+        <button
+          className="mt-3 w-full h-8 rounded-[9px] border border-line bg-white text-[11.5px] text-ink2 cursor-pointer hover:border-accent hover:text-accent disabled:opacity-60 disabled:cursor-default"
+          disabled={switching}
+          onClick={() => onSwitch(account.id)}
+        >
+          {switching ? (
+            <span className="flex items-center justify-center gap-1.5">
+              <span className="w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+              切换中…
+            </span>
+          ) : (
+            "切换到此账号"
+          )}
+        </button>
+      )}
+    </div>
+  );
+}

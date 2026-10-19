@@ -1,0 +1,756 @@
+import { useEffect, useRef, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import type { Account, AccountStatus, Ide, Page, ToastItem } from "./types";
+import {
+  addAccount,
+  bridgeStatus,
+  claimCheckin,
+  coldSwitchRestart,
+  deleteAccount,
+  DEFAULT_SETTINGS,
+  errText,
+  getLogs,
+  getSettings,
+  ideStatus as fetchIdeStatus,
+  importLocalAccount,
+  installPaths,
+  isTauri,
+  launchIsolatedInstance,
+  listAccounts,
+  queryAssets,
+  queryCheckin,
+  queryQuota,
+  sessionUsage,
+  setAccountPinned,
+  shimStatus,
+  switchAccount,
+  updateAccount,
+  verifyAccount,
+  type AccountSummary,
+  type AppSettings,
+  type AssetBundle,
+  type IdeStatus,
+  type PackQuota,
+  type SessionUsage,
+  type ShimStatus,
+} from "./bridge";
+import { TitleBar } from "./components/TitleBar";
+import { Sidebar } from "./components/Sidebar";
+import { StatusBar } from "./components/StatusBar";
+import { Toasts } from "./components/Toasts";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { AddAccountDialog, type AccountDraft } from "./components/AddAccountDialog";
+import type { AddTabRequest } from "./pages/AccountsPage";
+import { AccountsPage } from "./pages/AccountsPage";
+import { AssetsPage } from "./pages/AssetsPage";
+import { HealthPage } from "./pages/HealthPage";
+import { LogsPage } from "./pages/LogsPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { AboutPage } from "./pages/AboutPage";
+
+const COLLAPSED_KEY = "traeide-switcher.sidebar-collapsed";
+
+const AVATAR_COLORS = [
+  "linear-gradient(135deg,#0d9488,#43d3c2)",
+  "linear-gradient(135deg,#4f8ef7,#7cb1ff)",
+  "linear-gradient(135deg,#8b5cf6,#b79aff)",
+  "linear-gradient(135deg,#f59e0b,#fbbf24)",
+  "linear-gradient(135deg,#0ea5e9,#67d4ff)",
+  "linear-gradient(135deg,#14b8a6,#5eead4)",
+];
+
+function idHash(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+const STATUS_MAP: Record<AccountSummary["status"], AccountStatus> = {
+  Normal: "normal",
+  Exhausted: "exhausted",
+  Error: "error",
+};
+
+function toUiAccount(s: AccountSummary): Account {
+  return {
+    id: s.id,
+    name: s.name,
+    email: s.email,
+    initial: s.name.slice(0, 1),
+    color: AVATAR_COLORS[idHash(s.id) % AVATAR_COLORS.length],
+    plan: "free",
+    ide: s.ide,
+    status: STATUS_MAP[s.status],
+    daily: { used: 0, total: 1 },
+    weekly: { used: 0, total: 1 },
+    resetText: "",
+    note: s.note,
+    pinned: s.pinned ?? false,
+    threshold: s.threshold ?? null,
+  };
+}
+
+export default function App() {
+  const [page, setPage] = useState<Page>("accounts");
+  const [collapsedPref, setCollapsedPref] = useState(() => localStorage.getItem(COLLAPSED_KEY) === "1");
+  const [narrow, setNarrow] = useState(() => window.innerWidth < 900);
+  const [targetIde, setTargetIde] = useState<Ide>("trae-cn");
+  // 状态随结果带上归属 IDE：切目标时无需清空，也不会串显另一版本的数据
+  const [status, setStatus] = useState<{ ide: Ide; s: IdeStatus } | null>(null);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  // 资产缓存（按账号 id）：后台预取填充，增值页只读它，进入页面不再发请求
+  const [assetCache, setAssetCache] = useState<Record<string, AssetBundle>>({});
+  // 会话用量缓存（按 IDE）：会话归属"当前登录账号"，故与账号库无关，只在开机/切版本/换号后自动拉取
+  const [usageCache, setUsageCache] = useState<Record<string, SessionUsage | null>>({});
+  const [usageBusy, setUsageBusy] = useState(false);
+  const [usageErr, setUsageErr] = useState<string | null>(null);
+  const [usageAt, setUsageAt] = useState(0);
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  /** P0-2 批量操作进行中的动作名（null = 空闲） */
+  const [batchBusy, setBatchBusy] = useState<string | null>(null);
+  const [unread, setUnread] = useState(0);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  // 运行检查数据：全局后台轮询，页面只读（不再进入页面才查）
+  const [shim, setShim] = useState<ShimStatus | null>(null);
+  const [injected, setInjected] = useState<boolean | null>(null);
+  const [paths, setPaths] = useState<Record<Ide, string> | null>(null);
+  const [healthAt, setHealthAt] = useState(0);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [pendingColdId, setPendingColdId] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogTab, setDialogTab] = useState<AddTabRequest["tab"]>("paste");
+  const [editing, setEditing] = useState<Account | null>(null);
+  const toastSeq = useRef(0);
+  const settingsRef = useRef(settings);
+
+  const collapsed = narrow || collapsedPref;
+  const ideStatus = status?.ide === targetIde ? status.s : null;
+  // 当前生效账号按目标版本取自该 IDE 自身登录态（国际版/国内版各一套，互不串号）
+  const currentId = ideStatus?.currentId ?? "";
+
+  const pushToast = (kind: ToastItem["kind"], title: string, desc?: string) => {
+    const id = `t${++toastSeq.current}`;
+    setToasts((list) => [...list, { id, kind, title, desc }]);
+  };
+
+  const dismissToast = (id: string) => setToasts((list) => list.filter((t) => t.id !== id));
+
+  const notify = (body: string) => {
+    if (!settingsRef.current.notifications) return;
+    sendNotification({ title: "TraeIDE-Switcher", body });
+  };
+
+  const applyQuota = (id: string, packs: PackQuota[]) => {
+    const p = packs[0];
+    if (!p) return;
+    setAccounts((list) =>
+      list.map((a) => {
+        if (a.id !== id) return a;
+        const next: Account = {
+          ...a,
+          plan: p.product_type === 1 ? "pro" : "free",
+        };
+        if (a.ide === "trae-cn") {
+          const sources = packs.map((q) => ({
+            desc: q.desc || "积分",
+            remaining: Math.max(q.credits_limit - q.credits_used, 0),
+            used: q.credits_used,
+            limit: q.credits_limit,
+            unlimited: q.credits_unlimited,
+            expire: q.expire_time,
+          }));
+          next.daily = { used: 0, total: 0 };
+          next.weekly = { used: 0, total: 0 };
+          next.resetText = "";
+          next.credits = {
+            total: sources.reduce((sum, s) => sum + (s.unlimited ? 0 : s.remaining), 0),
+            sources,
+          };
+        } else {
+          next.daily = { used: p.basic_used, total: p.basic_limit };
+          next.weekly = { used: p.bonus_used, total: p.bonus_limit };
+          next.resetText = p.expire_time;
+        }
+        return next;
+      }),
+    );
+  };
+
+  // 额度查询结果落到卡片状态：失败必须显式标红并给出原因。
+  // 原先失败被 .catch 静默吞掉，卡片回落成"每日额度 1/1 · 正常"，用户根本看不出是查询失败。
+  const markQuota = (id: string, errorText: string | null) => {
+    setAccounts((list) =>
+      list.map((a) =>
+        a.id === id
+          ? errorText === null
+            ? { ...a, status: a.status === "exhausted" ? "exhausted" : "normal", errorText: undefined }
+            : { ...a, status: "error", errorText }
+          : a,
+      ),
+    );
+  };
+
+  const loadQuota = async (id: string, ide: Ide) => {
+    try {
+      // 额度与签到是两个独立请求，CN 账号并发拉取（原先串行，额度可见时间翻倍）
+      if (ide !== "trae-cn") {
+        applyQuota(id, await queryQuota(id));
+      } else {
+        const [packs, c] = await Promise.all([queryQuota(id), queryCheckin(id).catch(() => null)]);
+        applyQuota(id, packs);
+        if (c) {
+          setAccounts((list) =>
+            list.map((a) => (a.id === id ? { ...a, checkin: { checked: c.checked_in, reward: c.credits } } : a)),
+          );
+        }
+      }
+      markQuota(id, null);
+    } catch (e) {
+      markQuota(id, errText(e));
+      throw e;
+    }
+  };
+
+  // 入库结果入池：同 userId 重复入库（P0-5 去重）时原地更新，不再堆出重复卡片
+  const upsertSummary = (s: AccountSummary) => {
+    setAccounts((list) => {
+      const ui = toUiAccount(s);
+      return list.some((a) => a.id === s.id)
+        ? list.map((a) =>
+            a.id === s.id
+              ? { ...a, status: ui.status, pinned: ui.pinned ?? a.pinned, threshold: ui.threshold ?? a.threshold }
+              : a,
+          )
+        : [...list, ui];
+    });
+    loadQuota(s.id, s.ide).catch(() => undefined);
+  };
+
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < 900);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    getSettings()
+      .then(setSettings)
+      .catch((e) => pushToast("error", "设置读取失败，请重新打开本软件", errText(e)));
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    void (async () => {
+      if (!(await isPermissionGranted())) await requestPermission();
+    })();
+    const unlisteners: UnlistenFn[] = [];
+    let disposed = false;
+    const register = (p: Promise<UnlistenFn>) =>
+      p.then((fn) => {
+        if (disposed) fn();
+        else unlisteners.push(fn);
+      });
+    register(listen<{ to: string }>("account-switched", (e) => notify(`已自动切换到 ${e.payload.to}`)));
+    register(
+      listen("log-changed", async () => {
+        try {
+          const latest = (await getLogs())[0];
+          if (!latest) return;
+          if (latest.level !== "Info") setUnread((n) => n + 1);
+          if (latest.level !== "Info" && (latest.source === "Switch" || latest.source === "Quota")) {
+            notify(latest.message);
+          }
+        } catch {
+          // 日志拉取失败静默
+        }
+      }),
+    );
+    return () => {
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (page === "logs") setUnread(0);
+  }, [page]);
+
+  // 目标 IDE 实时状态轮询（运行/CDP/TSW 补丁/shim 心跳/登录态/当前生效账号）
+  // 依赖只挂 targetIde：切页面不应重置轮询，否则每次导航都空白一拍
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const poll = () =>
+      fetchIdeStatus(targetIde)
+        .then((s) => {
+          if (!disposed) setStatus({ ide: targetIde, s });
+        })
+        .catch(() => undefined);
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [targetIde]);
+
+  // 账号池重载：首次加载与外部触发（如增值页校验后状态已写回后端）共用
+  const reloadAccounts = async () => {
+    try {
+      const list = await listAccounts();
+      setAccounts(list.map(toUiAccount));
+      // 并发拉取：原先 for-await 串行，账号数 × 每号 1~2 个请求全部排队叠加
+      void Promise.all(list.map((s) => loadQuota(s.id, s.ide).catch(() => undefined)));
+      prefetchAssets(list);
+    } catch (e) {
+      pushToast("error", "账号列表读取失败，请稍后重试", errText(e));
+    }
+  };
+
+  // 资产后台预取：不阻塞 UI、不进页面才拉；失败静默（页面用缓存渲染，可手动刷新）
+  const prefetchAssets = (list: AccountSummary[]) => {
+    void Promise.all(
+      list.map((s) =>
+        queryAssets(s.id)
+          .then((b) => setAssetCache((m) => ({ ...m, [s.id]: b })))
+          .catch(() => undefined),
+      ),
+    );
+  };
+
+  // 手动刷新单账号资产：把结果写入缓存并返回（调用方负责提示）
+  const refreshAssets = async (id: string): Promise<AssetBundle> => {
+    const b = await queryAssets(id);
+    setAssetCache((m) => ({ ...m, [id]: b }));
+    return b;
+  };
+
+  // 会话用量自动拉取（本机 agent 本地 RPC）。自动路径先过门控：目标 IDE 未运行或
+  // 会话补丁未加载时不发请求，避免未就绪时反复失败刷日志；手动路径（notify）无条件执行并弹错误。
+  const ideReadyRef = useRef(false);
+  useEffect(() => {
+    ideReadyRef.current = !!(ideStatus?.running && ideStatus?.chatPinned);
+  }, [ideStatus]);
+
+  const refreshSessionUsage = async (ide: Ide = targetIde, notify = false) => {
+    if (!notify && !ideReadyRef.current) return;
+    setUsageBusy(true);
+    try {
+      const u = await sessionUsage(ide);
+      setUsageCache((m) => ({ ...m, [ide]: u }));
+      setUsageErr(null);
+    } catch (e) {
+      setUsageErr(errText(e));
+      if (notify) pushToast("error", "会话用量读取失败，请确认 Trae 已启动后重试", errText(e));
+    } finally {
+      setUsageBusy(false);
+      setUsageAt(Date.now());
+    }
+  };
+
+  // 自动获取触发点：目标版本切换后首拉 + 每 30s 刷新（轮询内被门控，未就绪即空转）
+  useEffect(() => {
+    if (!isTauri()) return;
+    const first = setTimeout(() => void refreshSessionUsage(targetIde), 1500);
+    const timer = setInterval(() => void refreshSessionUsage(targetIde), 30000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+    // refreshSessionUsage 每轮重建，语义上只依赖 targetIde
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetIde]);
+
+  // 运行检查后台轮询（15s）：shim 心跳/版本、补丁加载态、安装路径 —— 页面只读这里的结果，
+  // 不再"进入页面才查"，切页面也不会中断采集
+  const refreshHealth = async () => {
+    const [s, i, st] = await Promise.allSettled([
+      shimStatus(targetIde),
+      bridgeStatus(targetIde),
+      fetchIdeStatus(targetIde),
+    ]);
+    setShim(s.status === "fulfilled" ? s.value : null);
+    setInjected(i.status === "fulfilled" ? i.value : null);
+    if (st.status === "fulfilled") setStatus({ ide: targetIde, s: st.value });
+    setHealthAt(Date.now());
+  };
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const run = () => {
+      if (!disposed) void refreshHealth();
+    };
+    run();
+    installPaths()
+      .then((p) => {
+        if (!disposed) setPaths(p);
+      })
+      .catch(() => {
+        if (!disposed) setPaths(null);
+      });
+    const timer = setInterval(run, 15000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+    // refreshHealth 每轮重建，但语义上只依赖 targetIde
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetIde]);
+
+  useEffect(() => {
+    void reloadAccounts();
+  }, []);
+
+  const handleSwitch = async (id: string) => {
+    if (id === currentId || switchingId) return;
+    const target = accounts.find((a) => a.id === id);
+    if (!target) return;
+
+    setSwitchingId(id);
+    try {
+      const msg = await switchAccount(id, true);
+      pushToast("success", `已切换到 ${target.name}`, msg);
+      fetchIdeStatus(target.ide).then((s) => setStatus({ ide: target.ide, s })).catch(() => undefined);
+      // 换号后"当前登录账号"已变 → 稍后重取会话用量（agent 接管新账号需要一点时间）
+      setTimeout(() => void refreshSessionUsage(target.ide), 3000);
+    } catch (e) {
+      // 热换号失败（常见：Trae 非换号器启动、无 CDP 通道）→ 提示冷切换重启兜底
+      setPendingColdId(id);
+    } finally {
+      setSwitchingId(null);
+    }
+  };
+
+  const handleColdSwitchRestart = async () => {
+    const id = pendingColdId;
+    setPendingColdId(null);
+    if (!id) return;
+    const target = accounts.find((a) => a.id === id);
+    setSwitchingId(id);
+    try {
+      const msg = await coldSwitchRestart(id);
+      pushToast("success", `已切换到 ${target?.name ?? ""}`, msg);
+      const ide = target?.ide ?? targetIde;
+      fetchIdeStatus(ide)
+        .then((s) => setStatus({ ide, s }))
+        .catch(() => undefined);
+      // 冷切换 = IDE 重启，等其起来后再重取会话用量（此时补丁与新账号才生效）
+      for (const delay of [20000, 45000]) {
+        setTimeout(() => void refreshSessionUsage(ide), delay);
+      }
+    } catch (e) {
+      pushToast("error", `切换到 ${target?.name ?? ""} 失败，请先关闭 Trae 再重试`, errText(e));
+    } finally {
+      setSwitchingId(null);
+    }
+  };
+
+  const handleClaimCheckin = async (id: string) => {
+    setClaimingId(id);
+    try {
+      await claimCheckin(id);
+      pushToast("success", "签到成功");
+      await handleRefresh(id);
+    } catch (e) {
+      pushToast("error", "签到失败，请稍后重试", errText(e));
+    } finally {
+      setClaimingId(null);
+    }
+  };
+
+  const handleRefresh = async (id: string) => {
+    const acc = accounts.find((a) => a.id === id);
+    if (!acc) return;
+    try {
+      await loadQuota(id, acc.ide);
+      pushToast("success", "额度已刷新", acc.name);
+    } catch (e) {
+      pushToast("error", "额度查询失败，请确认账号登录有效后重试", errText(e));
+    }
+  };
+
+  // P0-6 置顶/取消置顶
+  const handlePin = async (id: string, pinned: boolean) => {
+    try {
+      await setAccountPinned(id, pinned);
+      setAccounts((l) => l.map((a) => (a.id === id ? { ...a, pinned } : a)));
+    } catch (e) {
+      pushToast("error", "置顶设置失败，请重试", errText(e));
+    }
+  };
+
+  // 多开：为该账号准备独立 user-data 目录并启动第二个 Trae 实例（不影响当前登录态）
+  const handleLaunchIsolated = async (id: string) => {
+    const acc = accounts.find((a) => a.id === id);
+    try {
+      const r = await launchIsolatedInstance(id);
+      pushToast("success", `${r.name} 已启动独立实例`, `数据目录：${r.dir}`);
+    } catch (e) {
+      pushToast("error", `多开 ${acc?.name ?? ""} 失败，请先关闭 Trae 再重试`, errText(e));
+    }
+  };
+
+  // P0-2 批量操作：选中的账号并发执行（各命令本身按账号幂等，并发即最短耗时）
+  const handleBatch = async (action: "refresh" | "checkin" | "verify" | "delete", ids: string[]) => {
+    if (ids.length === 0) return;
+    setBatchBusy(action);
+    try {
+      if (action === "delete") {
+        await Promise.all(ids.map((i) => deleteAccount(i).catch(() => undefined)));
+        setAccounts((l) => l.filter((a) => !ids.includes(a.id)));
+        setAssetCache((m) => {
+          const next = { ...m };
+          ids.forEach((i) => delete next[i]);
+          return next;
+        });
+        pushToast("success", `已从换号器移除 ${ids.length} 个账号`);
+      } else if (action === "refresh") {
+        const res = await Promise.all(
+          ids.map((i) => {
+            const acc = accounts.find((a) => a.id === i);
+            return acc ? loadQuota(i, acc.ide).then(() => true).catch(() => false) : Promise.resolve(false);
+          }),
+        );
+        pushToast("info", `额度刷新 ${res.filter(Boolean).length}/${ids.length} 成功`);
+      } else if (action === "checkin") {
+        const res = await Promise.all(ids.map((i) => claimCheckin(i).then(() => true).catch(() => false)));
+        pushToast("info", `签到 ${res.filter(Boolean).length}/${ids.length} 成功`);
+        void Promise.all(
+          ids.map((i) => {
+            const acc = accounts.find((a) => a.id === i);
+            return acc ? loadQuota(i, acc.ide).catch(() => undefined) : Promise.resolve();
+          }),
+        );
+      } else {
+        const res = await Promise.all(ids.map((i) => verifyAccount(i).then((v) => v.valid === true).catch(() => false)));
+        pushToast("info", `登录状态检查 ${res.filter(Boolean).length}/${ids.length} 通过`);
+        void reloadAccounts();
+      }
+    } finally {
+      setBatchBusy(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    const id = confirmId;
+    setConfirmId(null);
+    if (!id) return;
+    const acc = accounts.find((a) => a.id === id);
+    try {
+      await deleteAccount(id);
+      const next = accounts.filter((a) => a.id !== id);
+      setAccounts(next);
+      setAssetCache((m) => {
+        const { [id]: _drop, ...rest } = m;
+        return rest;
+      });
+      if (id === currentId) {
+        fetchIdeStatus(targetIde).then((s) => setStatus({ ide: targetIde, s })).catch(() => undefined);
+      }
+      pushToast("success", "账号已删除", acc?.name);
+    } catch (e) {
+      pushToast("error", "删除失败，请稍后重试", errText(e));
+    }
+  };
+
+  const openAddDialog = (req: AddTabRequest) => {
+    setEditing(null);
+    setDialogTab(req.tab);
+    setDialogOpen(true);
+  };
+
+  const openEditDialog = (id: string) => {
+    const acc = accounts.find((a) => a.id === id) ?? null;
+    setEditing(acc);
+    setDialogTab("paste");
+    setDialogOpen(true);
+  };
+
+  const handleSaveDraft = async (draft: AccountDraft) => {
+    const editingId = editing?.id;
+    setDialogOpen(false);
+    setEditing(null);
+
+    if (draft.kind === "edit") {
+      if (!editingId) return;
+      try {
+        await updateAccount(editingId, draft.name, draft.note, draft.threshold);
+        setAccounts((list) =>
+          list.map((a) =>
+            a.id === editingId
+              ? {
+                  ...a,
+                  name: draft.name,
+                  initial: draft.name.slice(0, 1),
+                  note: draft.note,
+                  threshold: draft.threshold,
+                }
+              : a,
+          ),
+        );
+        pushToast("success", "已保存修改", draft.name);
+      } catch (e) {
+        pushToast("error", "保存失败，请检查填写内容后重试", errText(e));
+      }
+      return;
+    }
+
+    if (draft.kind === "paste" || draft.kind === "login") {
+      try {
+        const s = await addAccount(draft.ide, draft.name, draft.note, draft.authBlob);
+        upsertSummary(s);
+        pushToast("success", s.replaced ? "已更新该账号的登录信息" : "账号已添加", s.name);
+      } catch (e) {
+        pushToast("error", "添加账号失败，请检查登录信息后重试", errText(e));
+      }
+      return;
+    }
+
+    if (draft.kind === "scan") {
+      for (const item of draft.items) {
+        try {
+          const s = await importLocalAccount(item.ide, item.name, "");
+          upsertSummary(s);
+          pushToast("success", s.replaced ? "已更新该账号" : "账号已添加", s.name);
+        } catch (e) {
+          pushToast("error", `导入 ${item.name} 失败，请稍后重试`, errText(e));
+        }
+      }
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-win">
+      <TitleBar />
+      <div className="flex-1 flex min-h-0">
+        <Sidebar
+          page={page}
+          onPage={setPage}
+          collapsed={collapsed}
+          onToggle={() => setCollapsedPref((v) => !v)}
+          targetIde={targetIde}
+          onTargetIde={setTargetIde}
+          logUnread={unread}
+          installPath={ideStatus?.install}
+        />
+        {page === "accounts" && (
+          <AccountsPage
+            accounts={accounts}
+            currentId={currentId}
+            switchingId={switchingId}
+            targetIde={targetIde}
+            ideStatus={ideStatus}
+            onAdd={openAddDialog}
+            onSwitch={handleSwitch}
+            onEdit={openEditDialog}
+            onDelete={setConfirmId}
+            onRefresh={handleRefresh}
+            claimingId={claimingId}
+            onClaimCheckin={handleClaimCheckin}
+            onPin={handlePin}
+            onRelogin={() => openAddDialog({ tab: "login" })}
+            onLaunchIsolated={handleLaunchIsolated}
+            onBatch={handleBatch}
+            batchBusy={batchBusy}
+          />
+        )}
+        {page === "assets" && (
+          // key=targetIde：切换目标版本时重新挂载，彻底清空上一版本的全部页面状态
+          <AssetsPage
+            key={targetIde}
+            accounts={accounts}
+            targetIde={targetIde}
+            assets={assetCache}
+            usage={usageCache[targetIde] ?? null}
+            usageBusy={usageBusy}
+            usageErr={usageErr}
+            usageAt={usageAt}
+            onRefreshUsage={(notify) => void refreshSessionUsage(targetIde, notify)}
+            onRefresh={refreshAssets}
+            onToast={pushToast}
+            onReload={reloadAccounts}
+          />
+        )}
+        {page === "health" && (
+          <HealthPage
+            targetIde={targetIde}
+            status={ideStatus}
+            shim={shim}
+            injected={injected}
+            installPath={paths?.[targetIde] ?? ""}
+            at={healthAt}
+            onRefresh={refreshHealth}
+            onToast={pushToast}
+          />
+        )}
+        {page === "logs" && <LogsPage onToast={pushToast} />}
+        {page === "settings" && (
+          <SettingsPage targetIde={targetIde} onToast={pushToast} onSettings={setSettings} />
+        )}
+        {page === "about" && (
+          <AboutPage
+            onCheckUpdate={async () => {
+              try {
+                const { check } = await import("@tauri-apps/plugin-updater");
+                const update = await check();
+                if (!update) {
+                  pushToast("info", "已是最新版本", "当前 v0.1.0");
+                  return;
+                }
+                pushToast("info", "发现新版本", `正在下载 v${update.version}…`);
+                await update.downloadAndInstall();
+                pushToast("success", "更新完成", "即将重启应用");
+                const { relaunch } = await import("@tauri-apps/plugin-process");
+                await relaunch();
+              } catch (e) {
+                pushToast("error", "检查更新失败，请检查网络后重试", errText(e));
+              }
+            }}
+          />
+        )}
+      </div>
+      <StatusBar targetIde={targetIde} autoSwitch={settings.auto_switch} ideStatus={ideStatus} />
+
+      <Toasts items={toasts} onDismiss={dismissToast} />
+
+      <ConfirmDialog
+        open={confirmId !== null}
+        title="删除账号"
+        description="将该账号从换号器移出（仅影响换号器，账号本身不受影响）。该账号已保存的登录信息与设备身份将一并清除。"
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmId(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingColdId !== null}
+        title="关闭 Trae 并重启切换？"
+        description="当前 Trae 并非由本换号器启动，无法无感换号。继续将先关闭 Trae（未保存内容可能丢失），再写入目标账号的登录信息并重启。"
+        confirmText="关闭并切换"
+        onConfirm={handleColdSwitchRestart}
+        onCancel={() => setPendingColdId(null)}
+      />
+
+      <AddAccountDialog
+        open={dialogOpen}
+        editing={editing}
+        initialTab={dialogTab}
+        targetIde={targetIde}
+        existingIds={accounts.map((a) => a.id)}
+        onClose={() => {
+          setDialogOpen(false);
+          setEditing(null);
+        }}
+        onSave={handleSaveDraft}
+        onToast={pushToast}
+      />
+    </div>
+  );
+}
