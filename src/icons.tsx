@@ -125,12 +125,10 @@ export function IconLogo({ className = "w-6 h-6" }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none">
       <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#logo-grad)" />
-      {/* 与 App 图标同一套“双向换号箭头”图形 */}
-      <g stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none">
-        <path d="M6.4 8.6 H14.6" />
-        <path d="M12.4 6.4 L14.6 8.6 L12.4 10.8" />
-        <path d="M17.6 15.4 H9.4" />
-        <path d="M11.6 13.2 L9.4 15.4 L11.6 17.6" />
+      {/* 与 App 图标同一套“粗体 T 字标” */}
+      <g stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" fill="none">
+        <path d="M7.6 8.4 H16.4" />
+        <path d="M12 8.4 V16.2" />
       </g>
       <defs>
         <linearGradient id="logo-grad" x1="2" y1="2" x2="22" y2="22">
