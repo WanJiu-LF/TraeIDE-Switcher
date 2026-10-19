@@ -67,6 +67,14 @@ const exists = spawnSync("gh", ["release", "view", tag, "--repo", RELEASE_REPO],
 if (exists.status === 0) {
   die(`产物仓库中已存在 ${tag}。请先同步提升 src-tauri/tauri.conf.json 与 package.json 的 version 后重试。`);
 }
+// GitHub 不允许在空仓库创建 Release，先探测一次提交数，避免构建完才发现发不出去
+const probe = spawnSync("gh", ["api", `repos/${RELEASE_REPO}/commits?per_page=1`, "--jq", "length"], {
+  cwd: root,
+  encoding: "utf8",
+});
+if (probe.status === 0 && probe.stdout.trim() === "0") {
+  die(`产物仓库 ${RELEASE_REPO} 仍是空仓库，GitHub 不允许创建 Release。请先在其中提交任意文件（如 README）后重试。`);
+}
 
 console.log(`[3/3] 发布 ${tag} 到 ${RELEASE_REPO}…`);
 const rel = spawnSync(
