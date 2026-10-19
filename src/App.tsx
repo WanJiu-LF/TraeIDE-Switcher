@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { Account, AccountStatus, Ide, Page, ToastItem } from "./types";
 import {
@@ -344,6 +345,14 @@ export default function App() {
   useEffect(() => {
     ideReadyRef.current = !!(ideStatus?.running && ideStatus?.chatPinned);
   }, [ideStatus]);
+
+  // 版本号只从打包时注入的 tauri 版本读取，避免多处硬编码导致升级后显示不一致
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(""));
+  }, []);
 
   const refreshSessionUsage = async (ide: Ide = targetIde, notify = false) => {
     if (!notify && !ideReadyRef.current) return;
@@ -703,6 +712,7 @@ export default function App() {
         )}
         {page === "about" && (
           <AboutPage
+            appVersion={appVersion}
             onCheckUpdate={async () => {
               try {
                 const { check } = await import("@tauri-apps/plugin-updater");
@@ -712,7 +722,7 @@ export default function App() {
                   new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000)),
                 ]);
                 if (!update) {
-                  pushToast("info", "已是最新版本", "当前 v0.1.0");
+                  pushToast("info", "已是最新版本", appVersion ? `当前 v${appVersion}` : undefined);
                   return;
                 }
                 pushToast("info", "发现新版本", `正在下载 v${update.version}…`);
@@ -732,7 +742,12 @@ export default function App() {
           />
         )}
       </div>
-      <StatusBar targetIde={targetIde} autoSwitch={settings.auto_switch} ideStatus={ideStatus} />
+      <StatusBar
+        targetIde={targetIde}
+        autoSwitch={settings.auto_switch}
+        ideStatus={ideStatus}
+        appVersion={appVersion}
+      />
 
       <Toasts items={toasts} onDismiss={dismissToast} />
 

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { IconLogo } from "../icons";
-
 interface AboutPageProps {
+  appVersion: string;
   onCheckUpdate: () => Promise<void> | void;
 }
 
@@ -12,7 +12,7 @@ const CREDITS = [
   { name: "Tailwind CSS", desc: "界面样式（外观排版）工具", license: "MIT" },
 ];
 
-export function AboutPage({ onCheckUpdate }: AboutPageProps) {
+export function AboutPage({ appVersion, onCheckUpdate }: AboutPageProps) {
   // 检查更新耗时（网络往返/下载校验）可能数秒：给出明确进行中状态，避免点击后无任何反馈
   const [checking, setChecking] = useState(false);
   const run = async () => {
@@ -41,7 +41,7 @@ export function AboutPage({ onCheckUpdate }: AboutPageProps) {
           <div className="ml-auto flex items-center gap-2.5">
             <div className="text-right">
               <div className="text-[11px] text-ink3">当前版本</div>
-              <div className="font-mono text-[13.5px] font-semibold">v0.1.0</div>
+              <div className="font-mono text-[13.5px] font-semibold">{appVersion ? `v${appVersion}` : "—"}</div>
             </div>
             <button className="btn-primary disabled:opacity-50" disabled={checking} onClick={() => void run()}>
               {checking ? "检查中…" : "检查更新"}

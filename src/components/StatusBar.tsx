@@ -5,9 +5,10 @@ interface StatusBarProps {
   targetIde: Ide;
   autoSwitch: boolean;
   ideStatus: IdeStatus | null;
+  appVersion: string;
 }
 
-export function StatusBar({ targetIde, autoSwitch, ideStatus }: StatusBarProps) {
+export function StatusBar({ targetIde, autoSwitch, ideStatus, appVersion }: StatusBarProps) {
   const name = targetIde === "trae" ? "Trae" : "Trae CN";
   const installed = ideStatus?.installed ?? false;
   const running = ideStatus?.running ?? false;
@@ -44,7 +45,7 @@ export function StatusBar({ targetIde, autoSwitch, ideStatus }: StatusBarProps) 
       <span className="text-ink3">|</span>
       <div>自动换号：{autoSwitch ? "开" : "关"}</div>
       <div className="ml-auto flex gap-4 text-ink3">
-        <span>v0.1.0</span>
+        <span>{appVersion ? `v${appVersion}` : ""}</span>
       </div>
     </footer>
   );
