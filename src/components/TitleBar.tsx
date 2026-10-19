@@ -22,19 +22,19 @@ export function TitleBar() {
       </div>
       <div className="ml-auto flex">
         <button
-          className="w-[42px] h-8 flex items-center justify-center text-ink3 text-[11px] rounded-md hover:bg-line-soft"
+          className="w-[42px] h-8 flex items-center justify-center text-ink3 text-[11px] rounded-md transition-colors duration-150 hover:bg-line-soft hover:text-ink2"
           onClick={() => safe((w) => w.minimize())}
         >
           —
         </button>
         <button
-          className="w-[42px] h-8 flex items-center justify-center text-ink3 text-[11px] rounded-md hover:bg-line-soft"
+          className="w-[42px] h-8 flex items-center justify-center text-ink3 text-[11px] rounded-md transition-colors duration-150 hover:bg-line-soft hover:text-ink2"
           onClick={() => safe((w) => w.toggleMaximize())}
         >
           ▢
         </button>
         <button
-          className="w-[42px] h-8 flex items-center justify-center text-ink3 text-[11px] rounded-md hover:bg-[#e8484c] hover:text-white"
+          className="w-[42px] h-8 flex items-center justify-center text-ink3 text-[11px] rounded-md transition-colors duration-150 hover:bg-[#e8484c] hover:text-white"
           onClick={() => safe((w) => w.close())}
         >
           ✕

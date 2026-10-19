@@ -126,7 +126,10 @@ function CreditsBlock({ account, claiming, onClaimCheckin }: { account: Account;
           ))}
       </div>
       <div className="flex items-center gap-1.5 mt-[2px]">
-        <b className="text-[23px] leading-tight font-bold font-mono">
+        <b
+          key={credits.total}
+          className="num-pop text-[23px] leading-tight font-bold font-mono"
+        >
           {credits.total.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </b>
         {hasUnlimited && (
@@ -213,7 +216,7 @@ export function AccountCard({
 
   return (
     <div
-      className={`lift relative h-full flex flex-col bg-card border rounded-[12px] p-4 shadow-card ${
+      className={`lift group relative h-full flex flex-col bg-card border rounded-[12px] p-4 shadow-card ${
         current ? "border-accent shadow-[0_0_0_2px_var(--color-accent-soft),var(--shadow-card)]" : "border-line"
       }`}
     >
@@ -236,7 +239,7 @@ export function AccountCard({
           </button>
         )}
         <div
-          className="w-[38px] h-[38px] rounded-[11px] flex-none flex items-center justify-center text-[15px] font-bold text-white"
+          className="w-[38px] h-[38px] rounded-[11px] flex-none flex items-center justify-center text-[15px] font-bold text-white transition-transform duration-200 ease-out group-hover:scale-105"
           style={{ background: account.color }}
         >
           {account.initial}
@@ -256,11 +259,11 @@ export function AccountCard({
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-8 z-20 w-[140px] bg-card border border-line rounded-[10px] shadow-soft py-1.5">
+              <div className="dropdown-in absolute right-0 top-8 z-20 w-[140px] bg-card border border-line rounded-[10px] shadow-soft py-1.5">
                 {menuItems.map((m) => (
                   <button
                     key={m.label}
-                    className={`w-full text-left px-3.5 py-[7px] text-[12px] cursor-pointer hover:bg-[#f0f6f7] ${
+                    className={`w-full text-left px-3.5 py-[7px] text-[12px] cursor-pointer transition-colors duration-150 hover:bg-[#f0f6f7] ${
                       m.danger ? "text-bad" : "text-ink2"
                     }`}
                     onClick={() => {
@@ -333,7 +336,7 @@ export function AccountCard({
 
         {!current && (
           <button
-            className="mt-3 w-full h-8 rounded-[9px] border border-line bg-white text-[11.5px] text-ink2 cursor-pointer hover:border-accent hover:text-accent disabled:opacity-60 disabled:cursor-default"
+            className="mt-3 w-full h-8 rounded-[9px] border border-line bg-white text-[11.5px] text-ink2 cursor-pointer transition-all duration-150 hover:border-accent hover:text-accent hover:shadow-card active:scale-[0.98] disabled:opacity-60 disabled:cursor-default disabled:hover:border-line disabled:hover:text-ink2 disabled:hover:shadow-none"
             disabled={switching}
             onClick={() => onSwitch(account.id)}
           >

@@ -158,7 +158,7 @@ export function AccountsPage(props: AccountsPageProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3.5 mb-[18px]">
+      <div className="stagger-in grid grid-cols-4 gap-3.5 mb-[18px]">
         <StatCard
           highlight
           mono={false}
@@ -243,7 +243,7 @@ export function AccountsPage(props: AccountsPageProps) {
       </div>
 
       {batchMode && (
-        <div className="flex flex-wrap items-center gap-2.5 mb-4 px-3.5 py-2.5 rounded-[10px] border border-accent-line bg-[#f3fbf9]">
+        <div className="dropdown-in flex flex-wrap items-center gap-2.5 mb-4 px-3.5 py-2.5 rounded-[10px] border border-accent-line bg-[#f3fbf9]">
           <span className="text-[12px] text-ink2 flex-none whitespace-nowrap">
             已选 {sel.length} / {sorted.length}
           </span>
@@ -315,7 +315,7 @@ export function AccountsPage(props: AccountsPageProps) {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-3.5 pb-4">
+        <div className="stagger-in grid grid-cols-3 gap-3.5 pb-4">
           {sorted.map((a) => (
             <AccountCard
               key={a.id}

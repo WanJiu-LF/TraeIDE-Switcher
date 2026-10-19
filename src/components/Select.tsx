@@ -74,7 +74,7 @@ export function Select({
       {open && (
         <div
           className={`absolute z-40 left-0 right-0 bg-white border border-line rounded-[10px] shadow-soft py-1 max-h-[240px] overflow-y-auto ${
-            dropUp ? "bottom-[38px]" : "top-[38px]"
+            dropUp ? "dropdown-in-up bottom-[38px]" : "dropdown-in top-[38px]"
           }`}
         >
           {options.length === 0 ? (

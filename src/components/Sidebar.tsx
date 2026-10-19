@@ -40,7 +40,7 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
     >
       <div className={`flex items-center ${collapsed ? "justify-center px-0" : "gap-2.5 px-2.5"} pb-4`}>
         <IconLogo className="w-[26px] h-[26px] flex-none" />
-        {!collapsed && <span className="text-[14.5px] font-bold whitespace-nowrap">Trae 换号器</span>}
+        {!collapsed && <span className="fade-in text-[14.5px] font-bold whitespace-nowrap">Trae 换号器</span>}
       </div>
 
       {NAV.map((item) => {
@@ -50,14 +50,16 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
             key={item.key}
             title={collapsed ? item.label : undefined}
             onClick={() => onPage(item.key)}
-            className={`flex items-center ${collapsed ? "justify-center px-0" : "gap-2.5 px-3"} py-[9px] rounded-[10px] text-[13px] cursor-pointer ${
+            className={`nav-item flex items-center ${collapsed ? "justify-center px-0" : "gap-2.5 px-3"} py-[9px] rounded-[10px] text-[13px] cursor-pointer ${
               active ? "bg-accent-soft text-accent font-semibold" : "text-ink2 hover:bg-[#f0f6f7]"
             }`}
           >
             <item.icon />
-            {!collapsed && <span className="whitespace-nowrap">{item.label}</span>}
+            {!collapsed && <span className="fade-in whitespace-nowrap">{item.label}</span>}
             {!collapsed && item.key === "logs" && logUnread > 0 && (
-              <span className="ml-auto bg-bad text-white text-[10px] rounded-full px-1.5">{logUnread}</span>
+              <span key={logUnread} className="num-pop ml-auto bg-bad text-white text-[10px] rounded-full px-1.5">
+                {logUnread}
+              </span>
             )}
           </button>
         );
@@ -68,10 +70,10 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
       <button
         title={collapsed ? "展开侧栏" : undefined}
         onClick={onToggle}
-        className={`flex items-center ${collapsed ? "justify-center px-0" : "gap-2.5 px-3"} py-[9px] rounded-[10px] text-[13px] text-ink3 hover:bg-[#f0f6f7] cursor-pointer`}
+        className={`flex items-center ${collapsed ? "justify-center px-0" : "gap-2.5 px-3"} py-[9px] rounded-[10px] text-[13px] text-ink3 hover:bg-[#f0f6f7] hover:text-ink2 cursor-pointer transition-colors duration-150`}
       >
         {collapsed ? <IconChevronRight /> : <IconChevronLeft />}
-        {!collapsed && <span>收起侧栏</span>}
+        {!collapsed && <span className="fade-in">收起侧栏</span>}
       </button>
 
       <div className="mt-auto">
@@ -79,7 +81,7 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
           <button
             title={`目标版本：${targetIde === "trae" ? "Trae" : "Trae CN"}（点击切换）`}
             onClick={() => onTargetIde(targetIde === "trae" ? "trae-cn" : "trae")}
-            className="w-full py-2 rounded-[10px] bg-accent-soft text-accent text-[11px] font-bold cursor-pointer"
+            className="w-full py-2 rounded-[10px] bg-accent-soft text-accent text-[11px] font-bold cursor-pointer transition-colors duration-150 hover:bg-accent-line"
           >
             {targetIde === "trae" ? "TR" : "CN"}
           </button>
@@ -96,8 +98,8 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
                 <button
                   key={o.key}
                   onClick={() => onTargetIde(o.key)}
-                  className={`flex-1 py-[5px] rounded-[8px] text-[11.5px] cursor-pointer ${
-                    targetIde === o.key ? "bg-white text-accent font-semibold shadow-card" : "text-ink2"
+                  className={`flex-1 py-[5px] rounded-[8px] text-[11.5px] cursor-pointer transition-colors duration-150 ${
+                    targetIde === o.key ? "bg-white text-accent font-semibold shadow-card" : "text-ink2 hover:text-ink"
                   }`}
                 >
                   {o.label}

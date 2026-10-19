@@ -105,7 +105,7 @@ export function HealthPage({
         </button>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="stagger-in bg-card border border-line rounded-[12px] shadow-card mb-4">
         <Row
           title="Trae 安装位置"
           desc={installPath || "未找到 Trae 安装位置，请在设置中选择 Trae 目录"}
@@ -135,7 +135,7 @@ export function HealthPage({
         />
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="stagger-in bg-card border border-line rounded-[12px] shadow-card mb-4">
         <Row
           title="无感换号支持文件"
           desc="安装至 Trae 安装目录，Trae 运行中即可直接换号，并同步账号的设备信息"
@@ -188,7 +188,7 @@ export function HealthPage({
         />
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card">
+      <div className="stagger-in bg-card border border-line rounded-[12px] shadow-card">
         <Row
           title="无感换号支持是否已生效"
           desc="检查已安装的文件是否已在 Trae 中生效"

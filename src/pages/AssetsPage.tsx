@@ -340,7 +340,7 @@ function Section({
       </div>
       <div className="mt-2.5">{children}</div>
       {showRaw && raw !== undefined && (
-        <pre className="mt-2.5 bg-[#f7fafb] border border-line-soft rounded-[9px] p-3 text-[10.5px] font-mono text-ink2 overflow-x-auto max-h-[280px]">
+        <pre className="dropdown-in mt-2.5 bg-[#f7fafb] border border-line-soft rounded-[9px] p-3 text-[10.5px] font-mono text-ink2 overflow-x-auto max-h-[280px]">
           {dump(raw)}
         </pre>
       )}
@@ -771,7 +771,7 @@ export function AssetsPage({
           )}
         </div>
       ) : (
-        <div className="flex flex-col gap-3.5">
+        <div className="stagger-in flex flex-col gap-3.5">
           <Section title="我的积分" badge={`账号 ${bundle.name}`} raw={entitlement}>
             {sources.length === 0 ? (
               <div className="text-[11.5px] text-ink3">未读取到积分信息</div>
@@ -1095,7 +1095,7 @@ export function AssetsPage({
           </div>
 
           {advanced && (
-            <div className="flex flex-col gap-3.5">
+            <div className="dropdown-in flex flex-col gap-3.5">
               <Section title="账单流水" badge={billingList.length ? `${billingList.length} 条` : "无记录"} raw={billing}>
                 {billingList.length === 0 ? (
                   <div className="text-[11.5px] text-ink3">该账号暂无账单记录</div>

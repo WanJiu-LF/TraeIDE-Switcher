@@ -27,6 +27,14 @@
   --radius-xl: 16px;
   --radius-lg: 12px;
   --radius-md: 10px;
+
+  /* 动效令牌：全站共用同一套缓动与时长，保证节奏一致 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --t-fast: 0.12s;
+  --t-base: 0.2s;
+  --t-slow: 0.42s;
 }
 
 html,
@@ -45,39 +53,25 @@ body {
   overflow: hidden;
 }
 
-/* 页面切换轻量动效 */
+/* ============ 动效 ============ */
+
+/* 页面切换：入场自下而上轻微位移 + 微缩放 */
 @keyframes page-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px) scale(0.998);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 .page-in {
-  animation: page-in 0.22s ease both;
+  animation: page-in var(--t-slow) var(--ease-out) backwards;
 }
 
-/* 卡片悬停抬升 */
-.lift {
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
-}
-.lift:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lift);
-}
-
-/* 进度条平滑过渡 */
-.bar-fill {
-  transition: width 0.5s ease;
-}
-
-/* Toast 入场 */
-@keyframes toast-in {
+/* 列表依次入场：容器加 .stagger-in，子项按序延迟（最多 16 项，超出者统一 0.48s） */
+@keyframes rise-in {
   from {
     opacity: 0;
     transform: translateY(10px);
@@ -87,28 +81,209 @@ body {
     transform: translateY(0);
   }
 }
-.toast-in {
-  animation: toast-in 0.2s ease both;
+/* fill-mode 一律用 backwards：入场完成后不残留终值，避免后续 hover 位移被动画终帧覆盖 */
+.stagger-in > * {
+  animation: rise-in var(--t-slow) var(--ease-out) backwards;
+}
+.stagger-in > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-in > *:nth-child(2) { animation-delay: 30ms; }
+.stagger-in > *:nth-child(3) { animation-delay: 60ms; }
+.stagger-in > *:nth-child(4) { animation-delay: 90ms; }
+.stagger-in > *:nth-child(5) { animation-delay: 120ms; }
+.stagger-in > *:nth-child(6) { animation-delay: 150ms; }
+.stagger-in > *:nth-child(7) { animation-delay: 180ms; }
+.stagger-in > *:nth-child(8) { animation-delay: 210ms; }
+.stagger-in > *:nth-child(9) { animation-delay: 240ms; }
+.stagger-in > *:nth-child(10) { animation-delay: 270ms; }
+.stagger-in > *:nth-child(11) { animation-delay: 300ms; }
+.stagger-in > *:nth-child(12) { animation-delay: 330ms; }
+.stagger-in > *:nth-child(13) { animation-delay: 360ms; }
+.stagger-in > *:nth-child(14) { animation-delay: 390ms; }
+.stagger-in > *:nth-child(15) { animation-delay: 420ms; }
+.stagger-in > *:nth-child(16) { animation-delay: 450ms; }
+.stagger-in > *:nth-child(n + 17) { animation-delay: 480ms; }
+
+/* 卡片悬停抬升 */
+.lift {
+  transition:
+    transform var(--t-base) var(--ease-out),
+    box-shadow var(--t-base) var(--ease-out),
+    border-color var(--t-base) var(--ease-out);
+  will-change: transform;
+}
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lift);
 }
 
-/* 弹窗入场 */
-@keyframes dialog-in {
+/* 进度条：宽度与颜色平滑过渡，首次渲染自左向右展开 */
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.bar-fill {
+  transform-origin: left center;
+  transition:
+    width var(--t-slow) var(--ease-out),
+    background-color var(--t-base) linear;
+  animation: bar-grow 0.6s var(--ease-out) backwards;
+}
+
+/* 展开式浮层：下拉菜单与选择器列表 */
+@keyframes dropdown-in {
   from {
     opacity: 0;
-    transform: scale(0.97) translateY(8px);
+    transform: translateY(-6px) scale(0.97);
   }
   to {
     opacity: 1;
-    transform: scale(1) translateY(0);
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes dropdown-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.dropdown-in {
+  transform-origin: top;
+  animation: dropdown-in var(--t-base) var(--ease-out) backwards;
+}
+.dropdown-in-up {
+  transform-origin: bottom;
+  animation: dropdown-in-up var(--t-base) var(--ease-out) backwards;
+}
+
+/* Toast 入退场 */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateX(18px) scale(0.98);
+  }
+}
+.toast-in {
+  animation: toast-in 0.26s var(--ease-out) backwards;
+}
+.toast-out {
+  animation: toast-out 0.18s var(--ease-in-out) both;
+  pointer-events: none;
+}
+/* Toast 存活倒计时条 */
+@keyframes life-shrink {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+.life-bar {
+  transform-origin: left center;
+  animation: life-shrink 3s linear both;
+}
+
+/* 遮罩与弹窗 */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.overlay-in {
+  animation: overlay-in var(--t-base) var(--ease-out) backwards;
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 .dialog-in {
-  animation: dialog-in 0.18s ease both;
+  animation: dialog-in 0.24s var(--ease-spring) backwards;
+}
+
+/* 活跃状态点：呼吸光圈 */
+@keyframes dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--dot-c);
+  }
+  70% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.dot-live {
+  animation: dot-pulse 2.2s var(--ease-out) infinite;
+  transition: background-color var(--t-base) var(--ease-out);
+}
+.dot-live-ok {
+  --dot-c: rgba(34, 197, 94, 0.5);
+}
+.dot-live-warn {
+  --dot-c: rgba(245, 158, 11, 0.5);
+}
+
+/* 数值更新提示：轻量放大回弹 */
+@keyframes num-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.num-pop {
+  display: inline-block;
+  animation: num-pop 0.42s var(--ease-spring) backwards;
 }
 
 /* 侧栏收纳过渡 */
 .sidebar-width {
-  transition: width 0.18s ease;
+  transition: width var(--t-base) var(--ease-out);
+}
+/* 侧栏文字随展开淡入 */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.fade-in {
+  animation: fade-in var(--t-base) var(--ease-out) backwards;
 }
 
 @layer components {
@@ -126,9 +301,19 @@ body {
     font-weight: 600;
     box-shadow: var(--shadow-fab);
     cursor: pointer;
+    transition:
+      background-color var(--t-fast) linear,
+      box-shadow var(--t-base) var(--ease-out),
+      transform var(--t-fast) var(--ease-out);
   }
-  .btn-primary:hover {
-    opacity: 0.92;
+  .btn-primary:hover:not(:disabled) {
+    background: #0b8578;
+    box-shadow: 0 7px 18px rgba(13, 148, 136, 0.34);
+    transform: translateY(-1px);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: translateY(0) scale(0.97);
+    box-shadow: var(--shadow-fab);
   }
   .btn-ghost {
     height: 34px;
@@ -143,10 +328,25 @@ body {
     font-size: 12.5px;
     color: var(--color-ink2);
     cursor: pointer;
+    transition:
+      background-color var(--t-fast) linear,
+      border-color var(--t-base) var(--ease-out),
+      color var(--t-base) var(--ease-out),
+      transform var(--t-fast) var(--ease-out);
   }
-  .btn-ghost:hover {
+  .btn-ghost:hover:not(:disabled) {
     border-color: var(--color-accent-line);
     color: var(--color-accent);
+    background: #f7fcfb;
+    transform: translateY(-1px);
+  }
+  .btn-ghost:active:not(:disabled) {
+    transform: translateY(0) scale(0.97);
+  }
+  .btn-primary:disabled,
+  .btn-ghost:disabled {
+    cursor: default;
+    transform: none;
   }
   .input {
     width: 100%;
@@ -161,12 +361,42 @@ body {
     color: var(--color-ink2);
     background: #fbfdfe;
     outline: none;
+    transition:
+      border-color var(--t-base) var(--ease-out),
+      box-shadow var(--t-base) var(--ease-out),
+      background-color var(--t-base) linear;
   }
   .input:focus {
     border-color: var(--color-accent-line);
+    background: #fff;
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
   }
   .input:disabled {
     opacity: 0.6;
+  }
+  /* 侧栏导航项：颜色过渡 + 图标微移 */
+  .nav-item {
+    transition:
+      background-color var(--t-base) var(--ease-out),
+      color var(--t-base) var(--ease-out);
+  }
+  .nav-item svg {
+    transition: transform var(--t-base) var(--ease-out);
+  }
+  .nav-item:hover svg {
+    transform: translateX(2px);
+  }
+}
+
+/* 尊重系统"减少动态效果"设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -177,6 +407,10 @@ body {
 ::-webkit-scrollbar-thumb {
   background: #cdd9e0;
   border-radius: 8px;
+  transition: background-color var(--t-base) linear;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b6c6d1;
 }
 ::-webkit-scrollbar-track {
   background: transparent;

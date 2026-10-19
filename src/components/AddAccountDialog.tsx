@@ -201,7 +201,10 @@ export function AddAccountDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#1e2d3d]/25" onClick={onClose}>
+    <div
+      className="overlay-in fixed inset-0 z-40 flex items-center justify-center bg-[#1e2d3d]/25 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
       <div
         className="dialog-in bg-card rounded-[16px] shadow-soft border border-line w-[560px] overflow-hidden"
         onClick={(e) => e.stopPropagation()}

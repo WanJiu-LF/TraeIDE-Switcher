@@ -27,7 +27,7 @@ export function StatusBar({ targetIde, autoSwitch, ideStatus }: StatusBarProps) 
       <div className="flex items-center">
         <span
           className={`w-[7px] h-[7px] rounded-full inline-block mr-1.5 ${
-            !installed ? "bg-bad" : running ? "bg-ok" : "bg-ink3"
+            !installed ? "bg-bad" : running ? "bg-ok dot-live dot-live-ok" : "bg-ink3"
           }`}
         />
         {name}：{!installed ? "未安装" : running ? "运行中" : "未运行"}
@@ -35,7 +35,9 @@ export function StatusBar({ targetIde, autoSwitch, ideStatus }: StatusBarProps) 
       <span className="text-ink3">|</span>
       <div className="flex items-center">
         <span
-          className={`w-[7px] h-[7px] rounded-full inline-block mr-1.5 ${hotReady ? "bg-ok" : "bg-warn"}`}
+          className={`w-[7px] h-[7px] rounded-full inline-block mr-1.5 ${
+            hotReady ? "bg-ok dot-live dot-live-ok" : "bg-warn"
+          }`}
         />
         无感换号：{hotText}
       </div>
