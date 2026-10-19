@@ -8,3 +8,6 @@ src-tauri/keys/updater.key
 
 # 本地开发文档（含逆向细节与内部实现，不入库）
 DEV-NOTES.md
+
+# 图标候选草稿（仅供预览挑选，选定后再落到 build/icon.svg）
+build/icon-candidates/
