@@ -1,14 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0d9488"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b8f83"/>
+      <stop offset="0.55" stop-color="#12a597"/>
       <stop offset="1" stop-color="#43d3c2"/>
     </linearGradient>
+    <!-- 顶部柔光，避免大色块显得扁平 -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#g)"/>
-  <!-- 双向换号箭头 -->
-  <g stroke="#ffffff" stroke-width="42" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <path d="M148 208 h196 l-56 -56"/>
-    <path d="M364 304 H168 l56 56"/>
+
+  <rect width="512" height="512" rx="118" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="118" fill="url(#sheen)"/>
+  <!-- 内侧描边：贴近 Win11 应用磁贴的收边质感 -->
+  <rect x="7" y="7" width="498" height="498" rx="112" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="14"/>
+
+  <!-- 双向换号箭头：粗笔画 + 完整箭头，保证 16~32px 下仍可辨认 -->
+  <g stroke="#ffffff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M136 178 H352"/>
+    <path d="M308 134 L352 178 L308 222"/>
+    <path d="M376 334 H160"/>
+    <path d="M204 290 L160 334 L204 378"/>
   </g>
 </svg>

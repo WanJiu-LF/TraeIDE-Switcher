@@ -125,10 +125,16 @@ export function IconLogo({ className = "w-6 h-6" }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none">
       <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#logo-grad)" />
-      <path d="M7 12.5l3.2 3.2L17 9" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      {/* 与 App 图标同一套“双向换号箭头”图形 */}
+      <g stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none">
+        <path d="M6.4 8.6 H14.6" />
+        <path d="M12.4 6.4 L14.6 8.6 L12.4 10.8" />
+        <path d="M17.6 15.4 H9.4" />
+        <path d="M11.6 13.2 L9.4 15.4 L11.6 17.6" />
+      </g>
       <defs>
         <linearGradient id="logo-grad" x1="2" y1="2" x2="22" y2="22">
-          <stop stopColor="#0d9488" />
+          <stop stopColor="#0b8f83" />
           <stop offset="1" stopColor="#43d3c2" />
         </linearGradient>
       </defs>

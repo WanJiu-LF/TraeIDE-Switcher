@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { IconLogo } from "../icons";
 
 interface AboutPageProps {
   onCheckUpdate: () => Promise<void> | void;
@@ -32,9 +33,7 @@ export function AboutPage({ onCheckUpdate }: AboutPageProps) {
 
       <div className="bg-card border border-line rounded-[12px] shadow-card p-6 mb-4">
         <div className="flex items-center gap-4">
-          <div className="w-[56px] h-[56px] rounded-[16px] bg-gradient-to-br from-accent to-[#43d3c2] flex items-center justify-center text-white text-[22px] font-bold">
-            T
-          </div>
+          <IconLogo className="w-[56px] h-[56px] flex-none" />
           <div>
             <div className="text-[16px] font-bold">TraeIDE-Switcher</div>
             <div className="text-[12px] text-ink3 mt-0.5">Trae / Trae CN 多账号切换器 · 开源软件</div>
