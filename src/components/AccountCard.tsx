@@ -208,7 +208,7 @@ export function AccountCard({
     { label: account.pinned ? "取消置顶" : "置顶显示", action: () => onPin?.(account.id, !account.pinned) },
     { label: "切换到此账号", action: () => onSwitch(account.id) },
     { label: "多开（独立实例）", action: () => onLaunchIsolated?.(account.id) },
-    { label: "重新登录并保存", action: () => onRelogin?.() },
+    { label: "重新登录采集", action: () => onRelogin?.() },
     { label: "刷新额度", action: () => onRefresh(account.id) },
     { label: "编辑", action: () => onEdit(account.id) },
     { label: "删除", action: () => onDelete(account.id), danger: true },

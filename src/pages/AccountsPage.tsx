@@ -295,7 +295,7 @@ export function AccountsPage(props: AccountsPageProps) {
           <div className="text-[12px] text-ink3">添加首个账号，开始管理多个 Trae 账号</div>
           <div className="flex gap-2.5 mt-2">
             <button className="btn-primary" onClick={() => onAdd({ tab: "paste" })}>
-              粘贴登录信息添加
+              粘贴 Token 添加
             </button>
             <button className="btn-ghost" onClick={() => onAdd({ tab: "scan" })}>
               扫描本机已登录账号

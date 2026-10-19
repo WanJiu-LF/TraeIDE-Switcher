@@ -27,8 +27,8 @@ type Tab = "paste" | "scan" | "login";
 type CapturePhase = "idle" | "pending" | "done" | "error";
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: "paste", label: "粘贴登录信息" },
-  { key: "scan", label: "读取本机登录信息" },
+  { key: "paste", label: "粘贴 Token" },
+  { key: "scan", label: "读取本机 Token" },
   { key: "login", label: "登录窗口添加" },
 ];
 
@@ -284,12 +284,12 @@ export function AddAccountDialog({
             <div className="px-6 py-5 min-h-[300px]">
               {tab === "paste" && (
                 <div>
-                  <Field label="登录信息">
+                  <Field label="Token">
                     <textarea
                       className="input h-[96px] py-2.5 resize-none items-start"
                       value={cred}
                       onChange={(e) => setCred(e.target.value)}
-                      placeholder="粘贴从浏览器复制的登录信息"
+                      placeholder="粘贴从浏览器复制的 Token（iCubeAuthInfo:// 加密串）"
                     />
                   </Field>
                   <div className="flex gap-3">
@@ -301,7 +301,7 @@ export function AddAccountDialog({
                     </Field>
                   </div>
                   <div className="text-[11px] text-ink3 mt-1">
-                    程序将根据登录信息自动识别 Trae / Trae CN；无法识别时，使用当前选中版本（{targetIde === "trae-cn" ? "Trae CN" : "Trae"}）
+                    程序将根据 Token 自动识别 Trae / Trae CN；无法识别时，使用当前选中版本（{targetIde === "trae-cn" ? "Trae CN" : "Trae"}）
                   </div>
                   <div className="flex justify-end gap-2.5 mt-6">
                     <button className="btn-ghost" onClick={onClose}>
@@ -427,7 +427,7 @@ export function AddAccountDialog({
                           : capturePhase === "pending"
                             ? "等待登录…"
                             : capturePhase === "done"
-                              ? "已获取登录信息"
+                              ? "已获取 Token"
                               : captureError}
                       </span>
                     </div>
@@ -440,14 +440,14 @@ export function AddAccountDialog({
                       {capturePhase === "pending" && (
                         <div className="text-center">
                           <div className="text-[12.5px] text-ink2">登录窗口已打开，请在新窗口中完成 Trae 登录</div>
-                          <div className="text-[11px] text-ink3 mt-1">通过官方登录页完成登录，将自动保存登录信息</div>
+                          <div className="text-[11px] text-ink3 mt-1">通过官方登录页完成登录，将自动保存 Token</div>
                           <button className="btn-ghost mt-3" onClick={cancelCapture}>
                             取消
                           </button>
                         </div>
                       )}
                       {capturePhase === "done" && (
-                        <div className="text-[12.5px] text-ink2">已获取登录信息，请在下方填写名称后保存到账号池</div>
+                        <div className="text-[12.5px] text-ink2">已获取 Token，请在下方填写名称后保存到账号池</div>
                       )}
                       {capturePhase === "error" && (
                         <div className="text-center">

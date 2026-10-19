@@ -991,8 +991,8 @@ export function AssetsPage({
                 : devices.length === 0
                   ? "无账号"
                   : incomplete === 0
-                    ? `${devices.length} 个账号的设备信息完整`
-                    : `${incomplete} 个账号的设备信息不完整`) + (bundle.device ? ` · 设备编号 ${bundle.device}` : "")
+                    ? `${devices.length} 个账号的设备身份完整`
+                    : `${incomplete} 个账号的设备身份不完整`) + (bundle.device ? ` · 设备编号 ${bundle.device}` : "")
             }
             action={
               <button
@@ -1000,7 +1000,7 @@ export function AssetsPage({
                 onClick={() =>
                   accountDevices(targetIde)
                     .then(setDevices)
-                    .catch((e) => onToast("error", "设备信息读取失败", errText(e)))
+                    .catch((e) => onToast("error", "设备身份读取失败", errText(e)))
                 }
               >
                 刷新
@@ -1008,14 +1008,14 @@ export function AssetsPage({
             }
           >
             {devices === null ? (
-              <div className="text-[11.5px] text-ink3">正在读取账号的设备信息…</div>
+              <div className="text-[11.5px] text-ink3">正在读取账号的设备身份…</div>
             ) : devices.length === 0 ? (
               <div className="text-[11.5px] text-ink3">该版本暂无账号，添加账号后将自动记录其设备身份。</div>
             ) : (
               <>
                 <div className="text-[11.5px] text-ink3 mb-2">
                   每个账号应携带独立的设备身份（设备编号 / 密钥对 / 机器标识），切换账号时一并切换。
-                  信息不完整的账号（较早版本添加）沿用本机当前设备信息，设备身份不会互相混用；
+                  信息不完整的账号（较早版本添加）沿用本机当前设备身份，设备身份不会互相混用；
                   密钥指纹相同，表示这些账号在服务器侧视为同一台设备。
                 </div>
                 <div className="border border-line-soft rounded-[10px] overflow-hidden">
@@ -1023,7 +1023,7 @@ export function AssetsPage({
                     <span className="flex-1">账号</span>
                     <span className="w-[150px] flex-none">设备编号</span>
                     <span className="w-[104px] flex-none">密钥指纹</span>
-                    <span className="w-[240px] flex-none">设备信息完整度</span>
+                    <span className="w-[240px] flex-none">设备身份完整度</span>
                   </div>
                   {devices.map((d) => (
                     <div key={d.id} className="flex items-center gap-3 px-3 py-2 border-t border-line-soft">

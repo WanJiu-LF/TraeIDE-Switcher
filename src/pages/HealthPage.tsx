@@ -129,7 +129,7 @@ export function HealthPage({
         />
         <Row
           title="登录状态"
-          desc={status?.currentId ? `当前账号：${status.currentId}` : "未读取到登录信息，请先启动 Trae 并登录"}
+          desc={status?.currentId ? `当前账号：${status.currentId}` : "未读取到登录态，请先启动 Trae 并登录"}
           state={status?.loggedIn ? "ok" : "warn"}
           text={status?.loggedIn ? "已登录" : "未登录"}
         />
@@ -138,7 +138,7 @@ export function HealthPage({
       <div className="stagger-in bg-card border border-line rounded-[12px] shadow-card mb-4">
         <Row
           title="无感换号支持文件"
-          desc="安装至 Trae 安装目录，Trae 运行中即可直接换号，并同步账号的设备信息"
+          desc="安装至 Trae 安装目录，Trae 运行中即可直接换号，并同步账号的设备身份"
           state={status?.tswPatched ? (status?.stalePatch ? "warn" : "ok") : "bad"}
           text={status?.tswPatched ? (status?.stalePatch ? "已安装未生效" : "已安装") : "未安装"}
           action={

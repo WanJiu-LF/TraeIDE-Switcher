@@ -607,9 +607,9 @@ export default function App() {
       try {
         const s = await addAccount(draft.ide, draft.name, draft.note, draft.authBlob);
         upsertSummary(s);
-        pushToast("success", s.replaced ? "已更新该账号的登录信息" : "账号已添加", s.name);
+        pushToast("success", s.replaced ? "已更新该账号的凭据" : "账号已添加", s.name);
       } catch (e) {
-        pushToast("error", "添加账号失败，请检查登录信息后重试", errText(e));
+        pushToast("error", "添加账号失败，请检查 Token 后重试", errText(e));
       }
       return;
     }
@@ -724,7 +724,7 @@ export default function App() {
       <ConfirmDialog
         open={confirmId !== null}
         title="删除账号"
-        description="将该账号从换号器移出（仅影响换号器，账号本身不受影响）。该账号已保存的登录信息与设备身份将一并清除。"
+        description="将该账号从换号器移出（仅影响换号器，账号本身不受影响）。该账号已保存的凭据与设备身份将一并清除。"
         onConfirm={handleDelete}
         onCancel={() => setConfirmId(null)}
       />
@@ -732,7 +732,7 @@ export default function App() {
       <ConfirmDialog
         open={pendingColdId !== null}
         title="关闭 Trae 并重启切换？"
-        description="当前 Trae 并非由本换号器启动，无法无感换号。继续将先关闭 Trae（未保存内容可能丢失），再写入目标账号的登录信息并重启。"
+        description="当前 Trae 并非由本换号器启动，无法无感换号。继续将先关闭 Trae（未保存内容可能丢失），再写入目标账号的凭据并重启。"
         confirmText="关闭并切换"
         onConfirm={handleColdSwitchRestart}
         onCancel={() => setPendingColdId(null)}
