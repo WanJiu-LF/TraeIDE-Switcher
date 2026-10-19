@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { IconLogo } from "../icons";
 
 /** 窗口最大化/还原时的内容轻量过渡：移除→重排→重加，保证连续点击也能重启动画 */
 function settlePulse() {
@@ -54,8 +55,8 @@ export function TitleBar() {
       data-tauri-drag-region
       className="h-[42px] flex-none flex items-center px-2 pl-4 bg-[#fdfefe] border-b border-line-soft"
     >
-      <div className="flex items-center gap-2 text-[12.5px] text-ink2">
-        <div title="Trae 换号器" className="w-4 h-4 rounded-[5px] bg-gradient-to-br from-accent to-[#3ecfc0]" />
+      <div className="flex items-center gap-2 text-[12.5px] text-ink2" title="Trae 换号器">
+        <IconLogo className="w-[18px] h-[18px] flex-none" />
         Trae 换号器
       </div>
       <div className="ml-auto flex">
