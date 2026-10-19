@@ -163,6 +163,59 @@ body {
   animation: dropdown-in-up var(--t-base) var(--ease-out) backwards;
 }
 
+/* 展开层收起：与入场对称的退场（延迟卸载期间播放） */
+@keyframes dropdown-out {
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+.dropdown-out {
+  transform-origin: top;
+  animation: dropdown-out 0.14s var(--ease-in-out) both;
+  pointer-events: none;
+}
+/* 向上展开的下拉，收起时向下退场 */
+@keyframes dropdown-out-up {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+.dropdown-out-up {
+  transform-origin: bottom;
+  animation: dropdown-out-up 0.14s var(--ease-in-out) both;
+  pointer-events: none;
+}
+
+/* 菜单项依次入场（配合内联 animation-delay 形成阶梯） */
+@keyframes item-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.menu-item-in {
+  animation: item-in 0.18s var(--ease-out) backwards;
+}
+
+/* 窗口最大化/还原时的内容轻量过渡（仅透明度，避免 transform 影响 fixed 定位元素） */
+@keyframes win-fade {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.win-settle #root {
+  animation: win-fade 0.2s var(--ease-out) backwards;
+}
+
 /* Toast 入退场 */
 @keyframes toast-in {
   from {
@@ -213,6 +266,15 @@ body {
 .overlay-in {
   animation: overlay-in var(--t-base) var(--ease-out) backwards;
 }
+@keyframes overlay-out {
+  to {
+    opacity: 0;
+  }
+}
+.overlay-out {
+  animation: overlay-out 0.14s var(--ease-in-out) both;
+  pointer-events: none;
+}
 @keyframes dialog-in {
   from {
     opacity: 0;
@@ -225,6 +287,15 @@ body {
 }
 .dialog-in {
   animation: dialog-in 0.24s var(--ease-spring) backwards;
+}
+@keyframes dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+.dialog-out {
+  animation: dialog-out 0.14s var(--ease-in-out) both;
 }
 
 /* 活跃状态点：呼吸光圈 */

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Account } from "../types";
 
 interface AccountCardProps {
@@ -239,6 +239,37 @@ export function AccountCard({
   onClaimCheckin,
 }: AccountCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuClosing, setMenuClosing] = useState(false);
+  const menuTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (menuTimer.current !== null) window.clearTimeout(menuTimer.current);
+    },
+    [],
+  );
+
+  /** 收起时先播退场动画再卸载（延迟 140ms，与 .dropdown-out 时长一致） */
+  const closeMenu = () => {
+    if (menuTimer.current !== null) window.clearTimeout(menuTimer.current);
+    setMenuClosing(true);
+    menuTimer.current = window.setTimeout(() => {
+      setMenuOpen(false);
+      setMenuClosing(false);
+      menuTimer.current = null;
+    }, 140);
+  };
+  const toggleMenu = () => {
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    if (menuTimer.current !== null) {
+      window.clearTimeout(menuTimer.current);
+      menuTimer.current = null;
+    }
+    setMenuClosing(false);
+    setMenuOpen(true);
+  };
 
   const menuItems: { label: string; action: () => void; danger?: boolean }[] = [
     { label: account.pinned ? "取消置顶" : "置顶显示", action: () => onPin?.(account.id, !account.pinned) },
@@ -286,24 +317,29 @@ export function AccountCard({
         </div>
         <div className="relative ml-auto">
           <button
-            className="w-7 h-7 rounded-md text-ink3 hover:bg-[#f0f6f7] cursor-pointer text-[15px] leading-none"
-            onClick={() => setMenuOpen((v) => !v)}
+            className={`w-7 h-7 rounded-md text-[15px] leading-none cursor-pointer transition-all duration-150 active:scale-90 ${
+              menuOpen ? "bg-accent-soft text-accent" : "text-ink3 hover:bg-[#f0f6f7]"
+            }`}
+            onClick={toggleMenu}
             title="更多操作"
           >
             ···
           </button>
           {menuOpen && (
             <>
-              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="dropdown-in absolute right-0 top-8 z-20 w-[140px] bg-card border border-line rounded-[10px] shadow-soft py-1.5">
-                {menuItems.map((m) => (
+              <div className="fixed inset-0 z-10" onClick={closeMenu} />
+              <div
+                className={`${menuClosing ? "dropdown-out" : "dropdown-in"} absolute right-0 top-8 z-20 w-[140px] bg-card border border-line rounded-[10px] shadow-soft py-1.5`}
+              >
+                {menuItems.map((m, i) => (
                   <button
                     key={m.label}
-                    className={`w-full text-left px-3.5 py-[7px] text-[12px] cursor-pointer transition-colors duration-150 hover:bg-[#f0f6f7] ${
+                    className={`menu-item-in w-full text-left px-3.5 py-[7px] text-[12px] cursor-pointer transition-colors duration-150 hover:bg-[#f0f6f7] ${
                       m.danger ? "text-bad" : "text-ink2"
                     }`}
+                    style={menuClosing ? undefined : { animationDelay: `${i * 18}ms` }}
                     onClick={() => {
-                      setMenuOpen(false);
+                      closeMenu();
                       m.action();
                     }}
                   >

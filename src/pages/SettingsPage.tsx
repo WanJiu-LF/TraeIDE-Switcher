@@ -33,11 +33,11 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
     <button
       onClick={onToggle}
-      className={`w-[38px] h-[21px] rounded-full relative cursor-pointer transition-colors ${on ? "bg-accent" : "bg-[#cfdce4]"}`}
+      className={`w-[38px] h-[21px] rounded-full relative cursor-pointer transition-colors duration-200 active:scale-95 ${on ? "bg-accent" : "bg-[#cfdce4]"}`}
     >
       <span
-        className={`absolute w-[17px] h-[17px] bg-white rounded-full top-[2px] shadow-[0_1px_3px_rgba(0,0,0,.2)] transition-all ${
-          on ? "right-[2px]" : "left-[2px]"
+        className={`absolute w-[17px] h-[17px] bg-white rounded-full top-[2px] left-[2px] shadow-[0_1px_3px_rgba(0,0,0,.2)] transition-transform duration-200 ease-out ${
+          on ? "translate-x-[17px]" : "translate-x-0"
         }`}
       />
     </button>

@@ -59,6 +59,9 @@ export function AddAccountDialog({
   const [captureError, setCaptureError] = useState("");
   const [threshold, setThreshold] = useState("");
   const pollTimer = useRef<number | null>(null);
+  // 关闭时先播退场动画再卸载（140ms，与 .dialog-out 时长一致）
+  const [visible, setVisible] = useState(open);
+  const [closing, setClosing] = useState(false);
 
   const stopPolling = () => {
     if (pollTimer.current !== null) {
@@ -104,7 +107,22 @@ export function AddAccountDialog({
 
   useEffect(() => () => cleanupCapture(), []);
 
-  if (!open) return null;
+  useEffect(() => {
+    if (open) {
+      setVisible(true);
+      setClosing(false);
+      return;
+    }
+    if (!visible) return;
+    setClosing(true);
+    const t = window.setTimeout(() => {
+      setVisible(false);
+      setClosing(false);
+    }, 140);
+    return () => window.clearTimeout(t);
+  }, [open, visible]);
+
+  if (!visible) return null;
 
   const editingEmail = editing?.email ?? "";
 
@@ -202,11 +220,11 @@ export function AddAccountDialog({
 
   return (
     <div
-      className="overlay-in fixed inset-0 z-40 flex items-center justify-center bg-[#1e2d3d]/25 backdrop-blur-[2px]"
+      className={`${closing ? "overlay-out" : "overlay-in"} fixed inset-0 z-40 flex items-center justify-center bg-[#1e2d3d]/25 backdrop-blur-[2px]`}
       onClick={onClose}
     >
       <div
-        className="dialog-in bg-card rounded-[16px] shadow-soft border border-line w-[560px] overflow-hidden"
+        className={`${closing ? "dialog-out" : "dialog-in"} bg-card rounded-[16px] shadow-soft border border-line w-[560px] overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center px-6 pt-5 pb-4">

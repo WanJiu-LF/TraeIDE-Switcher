@@ -30,16 +30,48 @@ export function Select({
   dropUp = false,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const current = options.find((o) => o.value === value);
+
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+
+  /** 收起时先播退场动画再卸载（140ms，与退场动画时长一致） */
+  const close = () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    setClosing(true);
+    closeTimer.current = window.setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+      closeTimer.current = null;
+    }, 140);
+  };
+  const toggle = () => {
+    if (open) {
+      close();
+      return;
+    }
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    setClosing(false);
+    setOpen(true);
+  };
 
   useEffect(() => {
     if (!open) return;
     const onDocDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") close();
     };
     document.addEventListener("mousedown", onDocDown);
     document.addEventListener("keydown", onKey);
@@ -47,6 +79,8 @@ export function Select({
       document.removeEventListener("mousedown", onDocDown);
       document.removeEventListener("keydown", onKey);
     };
+    // close 每次渲染都会重建，语义上只依赖 open
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   return (
@@ -54,7 +88,7 @@ export function Select({
       <button
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         className={`w-full h-[34px] flex items-center gap-2 px-3 bg-white border rounded-[10px] text-[12.5px] transition-colors ${
           disabled
             ? "border-line opacity-60 cursor-default"
@@ -74,7 +108,9 @@ export function Select({
       {open && (
         <div
           className={`absolute z-40 left-0 right-0 bg-white border border-line rounded-[10px] shadow-soft py-1 max-h-[240px] overflow-y-auto ${
-            dropUp ? "dropdown-in-up bottom-[38px]" : "dropdown-in top-[38px]"
+            dropUp
+              ? `${closing ? "dropdown-out-up" : "dropdown-in-up"} bottom-[38px]`
+              : `${closing ? "dropdown-out" : "dropdown-in"} top-[38px]`
           }`}
         >
           {options.length === 0 ? (
@@ -88,7 +124,7 @@ export function Select({
                   type="button"
                   onClick={() => {
                     onChange(o.value);
-                    setOpen(false);
+                    close();
                   }}
                   className={`w-full flex items-center gap-2 text-left px-3 py-[7px] text-[12.5px] cursor-pointer ${
                     active ? "bg-accent-soft text-accent font-semibold" : "text-ink2 hover:bg-[#f0f6f7]"
