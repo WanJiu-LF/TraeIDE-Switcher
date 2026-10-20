@@ -85,8 +85,9 @@ function toUiAccount(s: AccountSummary): Account {
     plan: "free",
     ide: s.ide,
     status: STATUS_MAP[s.status],
-    daily: { used: 0, total: 1 },
-    weekly: { used: 0, total: 1 },
+    // 额度未拉到前用 0/0 占位：避免国际版汇总被"默认 1/1"虚增（0/0 也不判耗尽）
+    daily: { used: 0, total: 0 },
+    weekly: { used: 0, total: 0 },
     resetText: "",
     note: s.note,
     pinned: s.pinned ?? false,

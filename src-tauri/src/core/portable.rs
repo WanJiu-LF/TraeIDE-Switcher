@@ -65,7 +65,12 @@ pub fn import(passphrase: &str, envelope: &str) -> Result<usize, String> {
     if env.get("format").and_then(|f| f.as_str()) != Some(FORMAT) {
         return Err("账号包格式不匹配".into());
     }
-    let iter = env.get("iterations").and_then(|i| i.as_u64()).unwrap_or(ITER as u64) as u32;
+    // iterations 来自文件，不可全信：夹到合理区间，避免被构造出 0/1 轮的退化 KDF
+    let iter = env
+        .get("iterations")
+        .and_then(|i| i.as_u64())
+        .unwrap_or(ITER as u64)
+        .clamp(1_000, 5_000_000) as u32;
     let salt = b64d(env.get("salt").and_then(|s| s.as_str()).ok_or("账号包缺少 salt 字段")?)?;
     let nonce = b64d(env.get("nonce").and_then(|s| s.as_str()).ok_or("账号包缺少 nonce 字段")?)?;
     let data = b64d(env.get("data").and_then(|s| s.as_str()).ok_or("账号包缺少 data 字段")?)?;
