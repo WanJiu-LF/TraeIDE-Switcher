@@ -18,6 +18,8 @@ pub fn run() {
             commands::export_vault_backup,
             commands::list_vault_backups,
             commands::import_vault_backup,
+            commands::export_portable,
+            commands::import_portable,
             commands::query_quota,
             commands::usage_history,
             commands::switch_history,
@@ -35,6 +37,7 @@ pub fn run() {
             commands::claim_checkin,
             commands::refresh_account,
             commands::switch_account,
+            commands::switch_isolated,
             commands::cold_switch_restart,
             commands::inject_bridge,
             commands::remove_bridge,
@@ -53,6 +56,7 @@ pub fn run() {
             commands::export_logs,
             commands::get_settings,
             commands::update_settings,
+            commands::app_update,
             commands::autostart,
         ])
         .plugin(tauri_plugin_notification::init())

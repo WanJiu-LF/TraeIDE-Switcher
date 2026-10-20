@@ -5,6 +5,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import type { Account, AccountStatus, Ide, Page, ToastItem } from "./types";
 import {
   addAccount,
+  appUpdate,
   bridgeStatus,
   claimCheckin,
   coldSwitchRestart,
@@ -26,6 +27,7 @@ import {
   setAccountPinned,
   shimStatus,
   switchAccount,
+  switchIsolated,
   updateAccount,
   verifyAccount,
   type AccountSummary,
@@ -89,6 +91,10 @@ function toUiAccount(s: AccountSummary): Account {
     note: s.note,
     pinned: s.pinned ?? false,
     threshold: s.threshold ?? null,
+    expiresAt: s.expires_at ?? null,
+    credExpired: s.cred_expired ?? false,
+    refreshError: s.refresh_error ?? null,
+    deviceMismatch: s.device_mismatch ?? false,
   };
 }
 
@@ -177,7 +183,10 @@ export default function App() {
           next.daily = { used: pack.basic_used, total: pack.basic_limit };
           next.weekly = { used: pack.bonus_used, total: pack.bonus_limit };
           next.noBonus = pack.no_bonus_quota;
-          next.dollar = pack.is_dollar_billing;
+          // 逆向核对（intl 3.5.91）：用量面板对基础/赠送额度硬编码 `$` 格式化
+          // （O9e: Number.isInteger(i)?`$${i}`:`$${i.toFixed(2)}`，调用点无 is_dollar_usage_billing 分支），
+          // 故国际版一律按美元渲染，不设"次数"口径
+          next.dollar = true;
           next.resetAt = pack.end_time > 0 ? pack.end_time : undefined;
           next.resetText = "";
         }
@@ -513,6 +522,17 @@ export default function App() {
     }
   };
 
+  // 在独立实例内无感换号（走该实例自己的切换助手通道；需实例已启动）
+  const handleSwitchIsolated = async (id: string) => {
+    const acc = accounts.find((a) => a.id === id);
+    try {
+      const msg = await switchIsolated(id);
+      pushToast("success", `已在独立实例中切换到 ${acc?.name ?? ""}`, msg);
+    } catch (e) {
+      pushToast("error", "独立实例切换失败，请确认该实例已启动后重试", errText(e));
+    }
+  };
+
   // P0-2 批量操作：选中的账号并发执行（各命令本身按账号幂等，并发即最短耗时）
   const handleBatch = async (action: "refresh" | "checkin" | "verify" | "delete", ids: string[]) => {
     if (ids.length === 0) return;
@@ -673,6 +693,7 @@ export default function App() {
             onPin={handlePin}
             onRelogin={() => openAddDialog({ tab: "login" })}
             onLaunchIsolated={handleLaunchIsolated}
+            onSwitchIsolated={handleSwitchIsolated}
             onBatch={handleBatch}
             batchBusy={batchBusy}
           />
@@ -708,25 +729,29 @@ export default function App() {
         )}
         {page === "logs" && <LogsPage onToast={pushToast} />}
         {page === "settings" && (
-          <SettingsPage targetIde={targetIde} onToast={pushToast} onSettings={setSettings} />
+          <SettingsPage
+            targetIde={targetIde}
+            onToast={pushToast}
+            onSettings={setSettings}
+            onReload={() => void reloadAccounts()}
+          />
         )}
         {page === "about" && (
           <AboutPage
             appVersion={appVersion}
             onCheckUpdate={async () => {
               try {
-                const { check } = await import("@tauri-apps/plugin-updater");
-                // 显式限时：插件自身无超时，链路半开时会出现"点击后长时间无任何反馈"
-                const update = await Promise.race([
-                  check(),
+                // 后端命令自带代理与自定义更新源；显式限时避免链路半开时"点击后无任何反馈"
+                const info = await Promise.race([
+                  appUpdate(false),
                   new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000)),
                 ]);
-                if (!update) {
+                if (!info.available) {
                   pushToast("info", "已是最新版本", appVersion ? `当前 v${appVersion}` : undefined);
                   return;
                 }
-                pushToast("info", "发现新版本", `正在下载 v${update.version}…`);
-                await update.downloadAndInstall();
+                pushToast("info", "发现新版本", `正在下载 v${info.version ?? ""}…`);
+                await appUpdate(true);
                 pushToast("success", "更新完成", "即将重启应用");
                 const { relaunch } = await import("@tauri-apps/plugin-process");
                 await relaunch();
@@ -734,7 +759,7 @@ export default function App() {
                 const timedOut = errText(e) === "timeout";
                 pushToast(
                   "error",
-                  timedOut ? "检查更新超时，请检查网络后重试" : "检查更新失败，请检查网络后重试",
+                  timedOut ? "检查更新超时，请检查网络或代理后重试" : "检查更新失败，请检查网络或代理后重试",
                   timedOut ? undefined : errText(e),
                 );
               }

@@ -78,7 +78,8 @@ pub(crate) fn post_raw(
     body: Value,
 ) -> Result<Value, QuotaError> {
     let (brand, osver) = device_headers();
-    let resp = ureq::post(&format!("{base}{path}"))
+    let resp = super::http::agent()
+        .post(&format!("{base}{path}"))
         .timeout(std::time::Duration::from_secs(12))
         .set("Authorization", &format!("Cloud-IDE-JWT {token}"))
         .set("Content-Type", "application/json")
@@ -147,7 +148,8 @@ impl QuotaClient {
     }
 
     fn post(&self, path: &str, token: &str, body: Value) -> Result<Value, QuotaError> {
-        let resp = ureq::post(&format!("{}{}", self.base, path))
+        let resp = super::http::agent()
+            .post(&format!("{}{}", self.base, path))
             // 必须设超时：ureq 默认无超时，链路抖动（连接重置/半开）会挂到操作系统级超时才失败。
             // Request::timeout 覆盖 DNS/连接/读写全程
             .timeout(std::time::Duration::from_secs(12))
@@ -302,7 +304,7 @@ fn num(v: &Value, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// 单账号"剩余量"统一口径：CN 用积分（credits），国际版用每日额度（basic）。
+/// 单账号"剩余量"统一口径：CN 用积分（credits），国际版用额度总量（基础 + 赠送）。
 /// 单位不同但都用于聚合与趋势采样，关键是**两版本都要有值** ——
 /// 国际版 credits_limit 恒为 0，只取 credits 会把国际版剩余一直记成 0（实测踩到）。
 pub fn remain_of(packs: &[PackQuota]) -> f64 {
@@ -316,8 +318,11 @@ pub fn remain_of(packs: &[PackQuota]) -> f64 {
             .map(|p| (p.credits_limit - p.credits_used).max(0.0))
             .sum();
     }
+    // 国际版：基础额度 + 赠送额度（no_bonus_quota 时赠送为 0，不影响和值）
     packs
         .iter()
-        .map(|p| (p.basic_limit - p.basic_used).max(0.0))
+        .map(|p| {
+            (p.basic_limit - p.basic_used).max(0.0) + (p.bonus_limit - p.bonus_used).max(0.0)
+        })
         .sum()
 }

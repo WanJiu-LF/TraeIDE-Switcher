@@ -152,6 +152,8 @@ fn perform_switch(from_name: &str, to_name: &str, target: &AccountBundle, app: &
         t0.elapsed().as_millis() as u64,
         &note,
     );
+    // 当前生效账号已变 → 刷新托盘菜单标注
+    crate::tray::refresh(app);
 }
 
 /// 保活窗口：token 剩余有效期低于该值时对非当前账号发起预刷新
@@ -183,14 +185,19 @@ fn keepalive(window_ms: i64) {
             match super::refresh::refresh_auth_blob(&b.ide, &b.auth_blob) {
                 Ok(nb) => {
                     b.auth_blob = nb;
+                    b.refresh_error = None;
                     refreshed += 1;
                     log(Level::Info, Source::Quota, format!("{} 保活预刷新成功", b.name));
                 }
-                Err(e) => log(
-                    Level::Warn,
-                    Source::Quota,
-                    format!("{} 保活预刷新失败：{e}", b.name),
-                ),
+                Err(e) => {
+                    let msg = e.to_string();
+                    b.refresh_error = Some(msg.clone());
+                    log(
+                        Level::Warn,
+                        Source::Quota,
+                        format!("{} 保活预刷新失败：{msg}", b.name),
+                    );
+                }
             }
         }
         if refreshed > 0 || expired > 0 {

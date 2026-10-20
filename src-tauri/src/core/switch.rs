@@ -54,6 +54,7 @@ pub fn scan_current(ide: &IdeKind) -> io::Result<Option<AccountBundle>> {
         sqm_id: sj.get(SQM_ID_KEY).and_then(|v| v.as_str()).map(String::from),
         pinned: false,
         threshold: None,
+        refresh_error: None,
         user_id: info.user_id,
     }))
 }
@@ -107,6 +108,16 @@ pub fn current_machine_id(ide: &IdeKind) -> Option<String> {
 /// 热换号（shim 主通道）：经扩展宿主调 _tsw.replaceUserInfo，免 --inspect
 /// device 载荷：machineId=本机原值锚定遥测；tinyDevice=目标账号 aha 设备（每号独立防绑定上限）
 pub fn hot_switch_via_shim(ide: &IdeKind, bundle: &AccountBundle, preserved_machine_id: &str) -> Result<Value, String> {
+    hot_switch_via_shim_ch(ide, bundle, preserved_machine_id, "")
+}
+
+/// 带通道的 shim 热换号（channel 非空 = 多开实例的独立通道）
+pub fn hot_switch_via_shim_ch(
+    ide: &IdeKind,
+    bundle: &AccountBundle,
+    preserved_machine_id: &str,
+    channel: &str,
+) -> Result<Value, String> {
     let user_info: Value =
         serde_json::from_str(&super::bytecrypto::decrypt_string(&bundle.auth_blob).map_err(|e| e.to_string())?)
             .map_err(|e| format!("auth blob JSON 解析失败: {e}"))?;
@@ -119,11 +130,34 @@ pub fn hot_switch_via_shim(ide: &IdeKind, bundle: &AccountBundle, preserved_mach
         "tinyDevice": tiny_device,
     });
     let payload = json!({ "action": "login", "userInfo": user_info, "device": device });
-    let result = super::shim::request_hot_swap(*ide, &payload, 5000)?;
+    let result = super::shim::request_hot_swap_ch(*ide, channel, &payload, 5000)?;
     if result.get("success").and_then(|v| v.as_bool()) != Some(true) {
         return Err(format!("切换助手无感换号失败: {result}"));
     }
     Ok(result)
+}
+
+/// 多开实例的 shim 通道名：由账号 id 派生（同账号的实例通道固定、跨账号互不冲突）
+pub fn isolated_channel(account_id: &str) -> String {
+    account_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .collect()
+}
+
+/// 在多开实例内无感换号：只走该实例的独立 shim 通道（多开实例不带 --inspect，无 CDP 兜底），
+/// 落盘目标写到实例自己的 user-data 目录；不更新主实例的 current 标记。
+pub fn hot_switch_isolated(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) -> Result<String, String> {
+    let channel = isolated_channel(account_id);
+    let mid = current_machine_id(ide).ok_or("无法读取本机 machineId")?;
+    hot_switch_via_shim_ch(ide, bundle, &mid, &channel)?;
+    persist_after_hot_isolated(ide, account_id, bundle, &mid).map_err(|e| e.to_string())?;
+    super::logger::log(
+        super::logger::Level::Info,
+        super::logger::Source::Switch,
+        format!("多开实例无感换号到 {}（通道 {channel}）", bundle.name),
+    );
+    Ok("已在独立实例中完成无感换号（无需重启）".into())
 }
 
 /// 写 usertag：有快照随号写回；无快照时保留现有映射并确保含目标 userId 的区域条目。
@@ -190,13 +224,33 @@ fn write_bundle_identity(sj: &mut StorageJson, bundle: &AccountBundle, machine_i
 pub fn persist_after_hot(ide: &IdeKind, bundle: &AccountBundle, preserved_machine_id: &str) -> io::Result<()> {
     let paths = IdePaths::detect(*ide)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IDE not installed"))?;
+    persist_after_hot_with(&paths, bundle, preserved_machine_id)
+}
 
-    let mut sj = StorageJson::load(&paths)?;
+/// 同上，但落盘目标指向多开实例自己的 user-data 目录（不能写主实例的 storage.json）
+pub fn persist_after_hot_isolated(
+    ide: &IdeKind,
+    account_id: &str,
+    bundle: &AccountBundle,
+    preserved_machine_id: &str,
+) -> io::Result<()> {
+    let mut paths = IdePaths::detect(*ide)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IDE not installed"))?;
+    paths.user_data = isolated_dir(account_id);
+    persist_after_hot_with(&paths, bundle, preserved_machine_id)
+}
+
+fn persist_after_hot_with(
+    paths: &IdePaths,
+    bundle: &AccountBundle,
+    preserved_machine_id: &str,
+) -> io::Result<()> {
+    let mut sj = StorageJson::load(paths)?;
     write_bundle_identity(&mut sj, bundle, Some(preserved_machine_id));
     sj.save()?;
 
     if let Some(snapshot) = bundle.tiny_storage.clone() {
-        let mut ts = TinyStorage::load_or_default(&paths)?;
+        let mut ts = TinyStorage::load_or_default(paths)?;
         ts.restore_data(snapshot);
         ts.save()?;
     }
@@ -321,6 +375,18 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
     };
     let r = result
         .and_then(|r| persist_after_hot(ide, bundle, &mid).map(|_| r).map_err(|e| e.to_string()))?;
+    // 设备寄存（ICDRS）未随号同步时显式告警：ICDRS 封在 ESM 闭包内，动态定位是死路，
+    // 唯一通路是静态补丁暴露的 __sw_icdrs；未命中说明补丁不完整，必须重装后重启 Trae
+    if r.get("deviceUpdated").and_then(|v| v.as_bool()) != Some(true) {
+        super::logger::log(
+            super::logger::Level::Warn,
+            super::logger::Source::Switch,
+            format!(
+                "无感换号到 {}（{channel} 通道）未同步设备寄存：请重新安装无感换号支持并重启 Trae",
+                bundle.name
+            ),
+        );
+    }
     super::vault::set_current_id(account_id);
     super::logger::log(
         super::logger::Level::Info,
@@ -450,6 +516,12 @@ fn expiry_to_epoch_ms(s: &str) -> Option<i64> {
         return Some(if n > 100_000_000_000 { n } else { n * 1000 });
     }
     iso_to_epoch_ms(t)
+}
+
+/// 凭据 access token 到期时刻（epoch 毫秒）；缺字段/解析失败返回 None
+pub fn token_expiry_ms(auth_blob: &str) -> Option<i64> {
+    let info = parse_auth_blob(auth_blob).ok()?;
+    expiry_to_epoch_ms(&info.expired_at)
 }
 
 /// token 是否将在 window_ms 内过期（含已过期）；解析失败按未临期处理（不阻断切换）

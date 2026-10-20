@@ -24,6 +24,14 @@ export interface Account {
   pinned?: boolean;
   /** 该账号独立耗尽阈值（剩余百分比），undefined = 用全局阈值 */
   threshold?: number | null;
+  /** 凭据 access token 到期时刻（epoch 毫秒）；无法解析时缺省 */
+  expiresAt?: number | null;
+  /** 凭据已过期（需重新登录采集） */
+  credExpired?: boolean;
+  /** 上次续期失败原因（如 20403 Token device not match） */
+  refreshError?: string | null;
+  /** 上次续期失败为设备不匹配 */
+  deviceMismatch?: boolean;
   daily: Quota;
   weekly: Quota;
   resetText: string;

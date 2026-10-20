@@ -8,6 +8,7 @@ use crate::core::switch;
 use crate::core::{cdp, launcher, store, vault};
 use serde::Serialize;
 use serde_json::{json, Value};
+use tauri_plugin_updater::UpdaterExt;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -26,9 +27,24 @@ pub struct AccountSummary {
     pub threshold: Option<f64>,
     /// 本次入库是否覆盖了已存在的同 userId 账号（仅 add/import 返回时有意义）
     pub replaced: bool,
+    /// 凭据 access token 到期时刻（epoch 毫秒）；无法解析时为 None
+    pub expires_at: Option<i64>,
+    /// 凭据已过期（access token 到期且未续期）
+    pub cred_expired: bool,
+    /// 上次续期失败原因（如 20403 Token device not match）；成功/未尝试时为 None
+    pub refresh_error: Option<String>,
+    /// 上次续期失败是否为设备不匹配（refreshToken 绑定签发设备，换机后必现）
+    pub device_mismatch: bool,
 }
 
 fn to_summary(b: &AccountBundle) -> AccountSummary {
+    let expires_at = switch::token_expiry_ms(&b.auth_blob);
+    let cred_expired = switch::token_near_expiry(&b.auth_blob, 0);
+    let device_mismatch = b
+        .refresh_error
+        .as_deref()
+        .map(|e| e.contains("20403") || e.to_lowercase().contains("device not match"))
+        .unwrap_or(false);
     AccountSummary {
         id: b.id.clone(),
         name: b.name.clone(),
@@ -40,6 +56,10 @@ fn to_summary(b: &AccountBundle) -> AccountSummary {
         pinned: b.pinned,
         threshold: b.threshold,
         replaced: false,
+        expires_at,
+        cred_expired,
+        refresh_error: b.refresh_error.clone(),
+        device_mismatch,
     }
 }
 
@@ -113,10 +133,17 @@ fn scan_local_account_impl(ide: &str) -> CmdResult<Option<AccountSummary>> {
 
 /// 把扫描到的账号入池（携原始加密串）
 #[tauri::command]
-pub async fn import_local_account(ide: String, name: String, note: String) -> CmdResult<AccountSummary> {
-    tauri::async_runtime::spawn_blocking(move || import_local_account_impl(&ide, &name, &note))
+pub async fn import_local_account(
+    app: tauri::AppHandle,
+    ide: String,
+    name: String,
+    note: String,
+) -> CmdResult<AccountSummary> {
+    let r = tauri::async_runtime::spawn_blocking(move || import_local_account_impl(&ide, &name, &note))
         .await
-        .map_err(err)?
+        .map_err(err)?;
+    crate::tray::refresh(&app);
+    r
 }
 
 fn import_local_account_impl(ide: &str, name: &str, note: &str) -> CmdResult<AccountSummary> {
@@ -137,14 +164,17 @@ fn import_local_account_impl(ide: &str, name: &str, note: &str) -> CmdResult<Acc
 /// 粘贴凭据入池（凭据为 auth blob 加密串原文；名称留空时自动取账号用户名/邮箱）
 #[tauri::command]
 pub async fn add_account(
+    app: tauri::AppHandle,
     ide: String,
     name: String,
     note: String,
     auth_blob: String,
 ) -> CmdResult<AccountSummary> {
-    tauri::async_runtime::spawn_blocking(move || add_account_impl(&ide, &name, &note, &auth_blob))
+    let r = tauri::async_runtime::spawn_blocking(move || add_account_impl(&ide, &name, &note, &auth_blob))
         .await
-        .map_err(err)?
+        .map_err(err)?;
+    crate::tray::refresh(&app);
+    r
 }
 
 fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdResult<AccountSummary> {
@@ -173,6 +203,7 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
         sqm_id: None,
         pinned: false,
         threshold: None,
+        refresh_error: None,
         user_id: info.user_id,
     };
     let mut bundles = load_bundles()?;
@@ -184,14 +215,17 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
 }
 
 #[tauri::command]
-pub fn delete_account(id: &str) -> CmdResult<()> {
+pub fn delete_account(app: tauri::AppHandle, id: &str) -> CmdResult<()> {
     let mut bundles = load_bundles()?;
     bundles.retain(|b| b.id != id);
-    save_bundles(&bundles)
+    save_bundles(&bundles)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn update_account(
+    app: tauri::AppHandle,
     id: &str,
     name: &str,
     note: &str,
@@ -202,23 +236,38 @@ pub fn update_account(
     b.name = name.to_string();
     b.note = note.to_string();
     b.threshold = threshold;
-    save_bundles(&bundles)
+    save_bundles(&bundles)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 /// P0-6 置顶/取消置顶（账号池排序用）
 #[tauri::command]
-pub fn set_account_pinned(id: &str, pinned: bool) -> CmdResult<()> {
+pub fn set_account_pinned(app: tauri::AppHandle, id: &str, pinned: bool) -> CmdResult<()> {
     let mut bundles = load_bundles()?;
     let b = bundles.iter_mut().find(|b| b.id == id).ok_or("账号不存在")?;
     b.pinned = pinned;
-    save_bundles(&bundles)
+    save_bundles(&bundles)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 /// 续期：refreshToken 换新 token 并写回账号库（同用户时同步 storage.json）
 fn do_refresh(b: &mut AccountBundle) -> CmdResult<()> {
-    b.auth_blob = crate::core::refresh::refresh_auth_blob(&b.ide, &b.auth_blob).map_err(err)?;
-    switch::sync_auth_if_same_user(&b.ide, &b.user_id, &b.auth_blob).map_err(err)?;
-    Ok(())
+    match crate::core::refresh::refresh_auth_blob(&b.ide, &b.auth_blob) {
+        Ok(nb) => {
+            b.auth_blob = nb;
+            switch::sync_auth_if_same_user(&b.ide, &b.user_id, &b.auth_blob).map_err(err)?;
+            b.refresh_error = None;
+            Ok(())
+        }
+        Err(e) => {
+            // 续期失败原因落到账号上（如 20403 Token device not match），供界面显式告警
+            let msg = e.to_string();
+            b.refresh_error = Some(msg.clone());
+            Err(msg)
+        }
+    }
 }
 
 /// A1 切换前预检：**已移除**。
@@ -709,6 +758,15 @@ pub async fn launch_isolated_instance(id: String) -> CmdResult<String> {
             return Err("未找到 Trae 可执行文件".to_string());
         }
         let dir = switch::prepare_isolated_data(&b.ide, &b).map_err(err)?;
+        // 多开实例装独立通道的切换助手：否则两实例抢同一触发文件，实例内无法无感换号
+        let channel = switch::isolated_channel(&b.id);
+        if let Err(e) = crate::core::shim::install_isolated(b.ide, &dir, &channel) {
+            crate::core::logger::log(
+                Level::Warn,
+                Source::Switch,
+                format!("多开实例切换助手安装失败（该实例暂不支持无感换号）：{e}"),
+            );
+        }
         let pid = launcher::launch_isolated(&paths, &dir).map_err(err)?;
         crate::core::logger::log(
             Level::Info,
@@ -716,6 +774,18 @@ pub async fn launch_isolated_instance(id: String) -> CmdResult<String> {
             format!("多开实例已启动：{}（pid {pid}，数据目录 {}）", b.name, dir.display()),
         );
         Ok(json!({ "pid": pid, "dir": dir.display().to_string(), "name": b.name }).to_string())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// 在多开实例内无感换号（走该实例的独立切换助手通道；实例不带 --inspect，无 CDP 兜底）
+#[tauri::command]
+pub async fn switch_isolated(id: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bundles = load_bundles()?;
+        let b = bundles.into_iter().find(|b| b.id == id).ok_or("账号不存在")?;
+        switch::hot_switch_isolated(&b.ide, &b, &b.id)
     })
     .await
     .map_err(err)?
@@ -738,8 +808,10 @@ pub async fn refresh_account(id: String) -> CmdResult<AccountSummary> {
 fn refresh_account_impl(id: &str) -> CmdResult<AccountSummary> {
     let mut bundles = load_bundles()?;
     let idx = bundles.iter().position(|b| b.id == id).ok_or("账号不存在")?;
-    do_refresh(&mut bundles[idx])?;
+    let r = do_refresh(&mut bundles[idx]);
+    // 无论成功失败都落盘：失败时把续期失败原因写回账号（否则界面无从得知）
     save_bundles(&bundles)?;
+    r?;
     Ok(to_summary(&bundles[idx]))
 }
 
@@ -841,10 +913,12 @@ fn precheck_target(b: &AccountBundle) -> CmdResult<()> {
 
 /// 换号：hot=true 走 shim 主通道（CDP 兜底）热换号，否则冷换号（写文件）
 #[tauri::command]
-pub async fn switch_account(id: String, hot: bool) -> CmdResult<String> {
-    tauri::async_runtime::spawn_blocking(move || switch_account_impl(&id, hot))
+pub async fn switch_account(app: tauri::AppHandle, id: String, hot: bool) -> CmdResult<String> {
+    let r = tauri::async_runtime::spawn_blocking(move || switch_account_impl(&id, hot))
         .await
-        .map_err(err)?
+        .map_err(err)?;
+    crate::tray::refresh(&app);
+    r
 }
 
 fn switch_account_impl(id: &str, hot: bool) -> CmdResult<String> {
@@ -990,10 +1064,12 @@ fn switch_account_impl(id: &str, hot: bool) -> CmdResult<String> {
 /// 冷切换兜底：关闭运行中的 Trae → 写登录态 → 以 --inspect 重启
 /// （Trae 运行中直接写 storage.json 会被内存回写覆盖，必须先关闭）
 #[tauri::command]
-pub async fn cold_switch_restart(id: String) -> CmdResult<String> {
-    tauri::async_runtime::spawn_blocking(move || cold_switch_restart_impl(&id))
+pub async fn cold_switch_restart(app: tauri::AppHandle, id: String) -> CmdResult<String> {
+    let r = tauri::async_runtime::spawn_blocking(move || cold_switch_restart_impl(&id))
         .await
-        .map_err(err)?
+        .map_err(err)?;
+    crate::tray::refresh(&app);
+    r
 }
 
 fn cold_switch_restart_impl(id: &str) -> CmdResult<String> {
@@ -1288,6 +1364,56 @@ pub fn update_settings(patch: serde_json::Value) -> CmdResult<crate::core::setti
     crate::core::settings::save(&s).map_err(err)?;
     crate::core::logger::log(crate::core::logger::Level::Info, crate::core::logger::Source::System, "设置已更新");
     Ok(s)
+}
+
+// ============ 应用内更新（走设置中的代理与自定义更新源）============
+
+/// 检查 / 下载并安装应用更新。`install=false` 只检查并返回元信息；
+/// `install=true` 直接下载并安装（Windows 下安装器启动后本进程退出）。
+/// 更新源与代理均取自设置：update_endpoint 为空用内置默认端点，http_proxy 为空则直连。
+#[tauri::command]
+pub async fn app_update(app: tauri::AppHandle, install: bool) -> CmdResult<String> {
+    use tauri::Emitter;
+    let s = crate::core::settings::load();
+    let mut builder = app.updater_builder();
+    let ep = s.update_endpoint.trim();
+    if !ep.is_empty() {
+        let url = url::Url::parse(ep).map_err(|e| format!("更新源地址无效：{e}"))?;
+        builder = builder.endpoints(vec![url]).map_err(err)?;
+    }
+    let proxy = s.http_proxy.trim();
+    if !proxy.is_empty() {
+        let p = url::Url::parse(proxy).map_err(|e| format!("代理地址无效：{e}"))?;
+        builder = builder.proxy(p);
+    }
+    let updater = builder.build().map_err(err)?;
+    let update = updater.check().await.map_err(err)?;
+    let Some(update) = update else {
+        return Ok(json!({ "available": false }).to_string());
+    };
+    if !install {
+        return Ok(json!({
+            "available": true,
+            "version": update.version.to_string(),
+            "date": update.date.map(|d| d.to_string()),
+            "body": update.body,
+        })
+        .to_string());
+    }
+    let handle = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                let _ = handle.emit(
+                    "update-progress",
+                    json!({ "chunk": chunk, "total": total }),
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(err)?;
+    Ok(json!({ "available": true, "installed": true }).to_string())
 }
 
 // ============ 增值信息（权益/付费状态/活动/账单/产品目录/会话用量）与设备诊断 ============
@@ -1630,10 +1756,12 @@ pub fn list_vault_backups() -> CmdResult<String> {
 
 /// 从备份包恢复：先校验可解密且结构合法，再整体替换（原库自动轮转为 accounts.bak）
 #[tauri::command]
-pub async fn import_vault_backup(path: String) -> CmdResult<String> {
-    tauri::async_runtime::spawn_blocking(move || import_vault_backup_impl(&path))
+pub async fn import_vault_backup(app: tauri::AppHandle, path: String) -> CmdResult<String> {
+    let r = tauri::async_runtime::spawn_blocking(move || import_vault_backup_impl(&path))
         .await
-        .map_err(err)?
+        .map_err(err)?;
+    crate::tray::refresh(&app);
+    r
 }
 
 fn import_vault_backup_impl(path: &str) -> CmdResult<String> {
@@ -1656,6 +1784,66 @@ fn import_vault_backup_impl(path: &str) -> CmdResult<String> {
         Level::Warn,
         Source::Account,
         format!("已从备份恢复账号库（{count} 个账号），原库轮转为 accounts.bak：{}", src.display()),
+    );
+    Ok(format!("已恢复 {count} 个账号；原账号库已轮转为 accounts.bak"))
+}
+
+// ============ 可移植账号包（口令加密，跨机迁移）============
+
+/// 导出账号包：以口令重加密账号库，写入备份目录并返回 {path, content}
+#[tauri::command]
+pub async fn export_portable(passphrase: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || export_portable_impl(&passphrase))
+        .await
+        .map_err(err)?
+}
+
+fn export_portable_impl(passphrase: &str) -> CmdResult<String> {
+    use crate::core::logger::{Level, Source};
+    // PBKDF2 20 万轮为 CPU 密集操作，已在 spawn_blocking 线程内执行
+    let envelope = crate::core::portable::export(passphrase)?;
+    let dir = crate::core::vault::backup_dir();
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("portable-{ts}.tsw"));
+    std::fs::write(&path, &envelope).map_err(err)?;
+    crate::core::logger::log(
+        Level::Info,
+        Source::Account,
+        format!("已导出可移植账号包：{}", path.display()),
+    );
+    Ok(json!({ "path": path.display().to_string(), "content": envelope }).to_string())
+}
+
+/// 导入账号包：source 为文件路径或账号包内容（以 `{` 开头判定为内容）
+#[tauri::command]
+pub async fn import_portable(
+    app: tauri::AppHandle,
+    passphrase: String,
+    source: String,
+) -> CmdResult<String> {
+    let r = tauri::async_runtime::spawn_blocking(move || import_portable_impl(&passphrase, &source))
+        .await
+        .map_err(err)?;
+    crate::tray::refresh(&app);
+    r
+}
+
+fn import_portable_impl(passphrase: &str, source: &str) -> CmdResult<String> {
+    use crate::core::logger::{Level, Source};
+    let raw = if source.trim_start().starts_with('{') {
+        source.to_string()
+    } else {
+        std::fs::read_to_string(source.trim()).map_err(|e| format!("读取账号包失败：{e}"))?
+    };
+    let count = crate::core::portable::import(passphrase, &raw)?;
+    crate::core::logger::log(
+        Level::Warn,
+        Source::Account,
+        format!("已用可移植账号包恢复账号库（{count} 个账号）"),
     );
     Ok(format!("已恢复 {count} 个账号；原账号库已轮转为 accounts.bak"))
 }

@@ -16,6 +16,8 @@ interface AccountCardProps {
   onRelogin?: () => void;
   /** 多开：独立 user-data 实例启动该账号 */
   onLaunchIsolated?: (id: string) => void;
+  /** 在该账号的独立实例内无感换号（需先用「多开（独立实例）」启动过） */
+  onSwitchIsolated?: (id: string) => void;
   onSwitch: (id: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
@@ -232,6 +234,7 @@ export function AccountCard({
   onPin,
   onRelogin,
   onLaunchIsolated,
+  onSwitchIsolated,
   onSwitch,
   onEdit,
   onDelete,
@@ -275,11 +278,18 @@ export function AccountCard({
     { label: account.pinned ? "取消置顶" : "置顶显示", action: () => onPin?.(account.id, !account.pinned) },
     { label: "切换到此账号", action: () => onSwitch(account.id) },
     { label: "多开（独立实例）", action: () => onLaunchIsolated?.(account.id) },
+    { label: "在独立实例中切换", action: () => onSwitchIsolated?.(account.id) },
     { label: "重新登录采集", action: () => onRelogin?.() },
     { label: "刷新额度", action: () => onRefresh(account.id) },
     { label: "编辑", action: () => onEdit(account.id) },
     { label: "删除", action: () => onDelete(account.id), danger: true },
   ];
+
+  // 凭据状态（按 access token 到期时刻）：已过期 / 即将过期（保活窗口 30 分钟）
+  const expLeftMs = account.expiresAt ? account.expiresAt - Date.now() : null;
+  const expiringSoon =
+    !account.credExpired && expLeftMs !== null && expLeftMs > 0 && expLeftMs <= 30 * 60 * 1000;
+  const expLeftMin = expiringSoon ? Math.max(1, Math.round((expLeftMs as number) / 60000)) : 0;
 
   return (
     <div
@@ -390,6 +400,25 @@ export function AccountCard({
         >
           额度查询失败，可稍后使用“刷新额度”重试：{account.errorText.length > 180 ? `${account.errorText.slice(0, 180)}…` : account.errorText}
         </div>
+      )}
+
+      {account.deviceMismatch ? (
+        <div
+          className="mt-2 text-[10.5px] text-[#b8860b] bg-[#fff8e6] border border-[#f0dca6] rounded-[8px] px-2 py-1.5 leading-snug break-all"
+          title={account.refreshError ?? undefined}
+        >
+          续期失败：refreshToken 与本机设备不匹配（20403），需在本机重新登录采集该账号
+        </div>
+      ) : account.credExpired ? (
+        <div className="mt-2 text-[10.5px] text-bad bg-[#fdeeee] border border-[#f6cfcf] rounded-[8px] px-2 py-1.5 leading-snug">
+          凭据已过期，无法自动续期，需重新登录采集
+        </div>
+      ) : (
+        expiringSoon && (
+          <div className="mt-2 text-[10.5px] text-[#b8860b] bg-[#fff8e6] border border-[#f0dca6] rounded-[8px] px-2 py-1.5 leading-snug">
+            凭据将于约 {expLeftMin} 分钟后到期，请留意自动续期结果
+          </div>
+        )
       )}
 
       {account.credits ? (

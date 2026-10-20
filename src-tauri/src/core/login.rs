@@ -409,7 +409,8 @@ fn exchange(
         .clone()
         .filter(|h| h.starts_with("http"))
         .unwrap_or_else(|| api_host(ide, &region));
-    let resp = ureq::post(&format!("{host}/trae/api/v3/oauth/ExchangeToken"))
+    let resp = super::http::agent()
+        .post(&format!("{host}/trae/api/v3/oauth/ExchangeToken"))
         .timeout(std::time::Duration::from_secs(15))
         .set("Content-Type", "application/json")
         .set("x-cloudide-token", "")

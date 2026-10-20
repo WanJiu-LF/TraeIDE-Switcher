@@ -29,6 +29,12 @@ pub struct AppSettings {
     /// 自动换号范围："all"=全池（默认） / "pinned"=只用置顶账号参与轮换
     #[serde(default = "default_switch_scope")]
     pub switch_scope: String,
+    /// HTTP 代理地址（如 http://127.0.0.1:7890）；空串 = 直连
+    #[serde(default)]
+    pub http_proxy: String,
+    /// 自定义更新源（latest.json 地址）；空串 = 使用内置默认端点
+    #[serde(default)]
+    pub update_endpoint: String,
 }
 
 fn default_daily_time() -> String {
@@ -59,6 +65,8 @@ impl Default for AppSettings {
             daily_time: default_daily_time(),
             switch_strategy: default_switch_strategy(),
             switch_scope: default_switch_scope(),
+            http_proxy: String::new(),
+            update_endpoint: String::new(),
         }
     }
 }

@@ -45,6 +45,10 @@ pub struct AccountBundle {
     /// 该账号独立耗尽阈值（剩余百分比），None = 用全局 settings.threshold
     #[serde(default)]
     pub threshold: Option<f64>,
+    /// 上次凭据续期（ExchangeToken）失败的原始原因；续期成功时清空。
+    /// 用于把 20403「Token device not match」这类静默降级暴露到界面上。
+    #[serde(default)]
+    pub refresh_error: Option<String>,
 }
 
 impl AccountBundle {

@@ -6,8 +6,10 @@ import {
   bridgeStatus,
   DEFAULT_SETTINGS,
   errText,
+  exportPortable,
   exportVaultBackup,
   getSettings,
+  importPortable,
   importVaultBackup,
   injectBridge,
   installPaths,
@@ -27,6 +29,8 @@ interface SettingsPageProps {
   targetIde: Ide;
   onToast: (kind: "success" | "error" | "info", title: string, desc?: string) => void;
   onSettings: (s: AppSettings) => void;
+  /** 账号库被整体替换（导入/恢复）后触发，用于刷新账号池 */
+  onReload: () => void;
 }
 
 function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
@@ -82,7 +86,7 @@ function Row({ title, desc, children }: { title: string; desc: string; children:
   );
 }
 
-export function SettingsPage({ targetIde, onToast, onSettings }: SettingsPageProps) {
+export function SettingsPage({ targetIde, onToast, onSettings, onReload }: SettingsPageProps) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [injected, setInjected] = useState<boolean | null>(null);
   const [shim, setShim] = useState<ShimStatus | null>(null);
@@ -91,6 +95,11 @@ export function SettingsPage({ targetIde, onToast, onSettings }: SettingsPagePro
   const [backups, setBackups] = useState<VaultBackup[]>([]);
   const [backupSel, setBackupSel] = useState("");
   const [backupBusy, setBackupBusy] = useState(false);
+  // 可移植账号包：口令、内容/路径、二次确认（导入会覆盖当前账号库）
+  const [portablePass, setPortablePass] = useState("");
+  const [portableSrc, setPortableSrc] = useState("");
+  const [portableBusy, setPortableBusy] = useState(false);
+  const [portableConfirm, setPortableConfirm] = useState(false);
 
   const loadBackups = async () => {
     try {
@@ -126,10 +135,45 @@ export function SettingsPage({ targetIde, onToast, onSettings }: SettingsPagePro
       const msg = await importVaultBackup(backupSel);
       onToast("success", "已从备份恢复", msg);
       await loadBackups();
+      onReload();
     } catch (e) {
       onToast("error", "恢复失败，请确认备份文件未损坏后重试", errText(e));
     } finally {
       setBackupBusy(false);
+    }
+  };
+
+  const runPortableExport = async () => {
+    setPortableBusy(true);
+    try {
+      const r = await exportPortable(portablePass);
+      // 回填内容到输入框，便于直接复制到剪贴板转存
+      setPortableSrc(r.content);
+      onToast("success", "已导出账号包", r.path);
+    } catch (e) {
+      onToast("error", "导出账号包失败", errText(e));
+    } finally {
+      setPortableBusy(false);
+    }
+  };
+
+  const runPortableImport = async () => {
+    // 导入会整体覆盖账号库：首次点击仅进入确认态，避免误操作
+    if (!portableConfirm) {
+      setPortableConfirm(true);
+      onToast("info", "请再次点击以确认导入", "导入将覆盖当前账号库（原库自动轮转为 accounts.bak）");
+      return;
+    }
+    setPortableConfirm(false);
+    setPortableBusy(true);
+    try {
+      const msg = await importPortable(portablePass, portableSrc);
+      onToast("success", "已导入账号包", msg);
+      onReload();
+    } catch (e) {
+      onToast("error", "导入账号包失败，请确认口令与内容后重试", errText(e));
+    } finally {
+      setPortableBusy(false);
     }
   };
 
@@ -340,6 +384,90 @@ export function SettingsPage({ targetIde, onToast, onSettings }: SettingsPagePro
           <button className="btn-ghost" disabled={!backupSel || backupBusy} onClick={runImport}>
             恢复
           </button>
+        </Row>
+      </div>
+
+      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+        <div className="px-[22px] py-4 border-b border-line-soft">
+          <div className="text-[13px] font-semibold">账号包导入导出（跨机迁移）</div>
+          <div className="text-[11.5px] text-ink3 mt-0.5">
+            以口令重新加密账号库（含凭据与设备资产），可在任意 Windows 机器或用户下用同一口令恢复；口令遗失无法找回。
+          </div>
+        </div>
+        <Row title="口令" desc="至少 6 位；导出与导入必须使用同一口令">
+          <input
+            className="input w-[220px]"
+            type="password"
+            value={portablePass}
+            placeholder="账号包口令"
+            onChange={(e) => {
+              setPortablePass(e.target.value);
+              setPortableConfirm(false);
+            }}
+          />
+          <button
+            className="btn-primary disabled:opacity-50"
+            disabled={portableBusy || portablePass.trim().length < 6}
+            onClick={() => void runPortableExport()}
+          >
+            {portableBusy ? "处理中…" : "导出账号包"}
+          </button>
+        </Row>
+        <div className="px-[22px] py-4">
+          <div className="text-[13px] font-semibold">导入账号包</div>
+          <div className="text-[11.5px] text-ink3 mt-0.5 mb-2">
+            粘贴账号包内容，或填写账号包文件路径；导入将覆盖当前账号库（原库自动轮转为 accounts.bak）。
+          </div>
+          <textarea
+            className="input w-full h-[96px] font-mono text-[11px] resize-none"
+            value={portableSrc}
+            placeholder="粘贴账号包内容，或填写文件路径（如 %APPDATA%\TraeIDE-Switcher\backup\portable-xxx.tsw）"
+            spellCheck={false}
+            onChange={(e) => {
+              setPortableSrc(e.target.value);
+              setPortableConfirm(false);
+            }}
+          />
+          <div className="flex justify-end mt-2">
+            <button
+              className={
+                portableConfirm
+                  ? "h-9 px-4 rounded-[10px] bg-bad text-white text-[12.5px] font-semibold cursor-pointer transition-all duration-150 hover:opacity-90 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed"
+                  : "btn-primary"
+              }
+              disabled={portableBusy || portablePass.trim().length < 6 || !portableSrc.trim()}
+              onClick={() => void runPortableImport()}
+            >
+              {portableBusy ? "处理中…" : portableConfirm ? "确认导入（覆盖当前账号库）" : "导入账号包"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+        <div className="px-[22px] py-4 border-b border-line-soft">
+          <div className="text-[13px] font-semibold">网络与更新</div>
+          <div className="text-[11.5px] text-ink3 mt-0.5">
+            仅支持 http / https 代理；本机回环请求（如调试端口）始终直连，不经过代理。
+          </div>
+        </div>
+        <Row title="HTTP 代理" desc="额度、签到、活动、登录、自动更新等全部对外请求经此代理；留空为直连">
+          <input
+            className="input w-[300px]"
+            value={settings.http_proxy}
+            placeholder="http://127.0.0.1:7890"
+            spellCheck={false}
+            onChange={(e) => apply({ http_proxy: e.target.value })}
+          />
+        </Row>
+        <Row title="自定义更新源" desc="留空使用内置 GitHub 发布源；填写 latest.json 完整地址可切换为镜像源">
+          <input
+            className="input w-[300px]"
+            value={settings.update_endpoint}
+            placeholder="留空 = 内置源"
+            spellCheck={false}
+            onChange={(e) => apply({ update_endpoint: e.target.value })}
+          />
         </Row>
       </div>
 

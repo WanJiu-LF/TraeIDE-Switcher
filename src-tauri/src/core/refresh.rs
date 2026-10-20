@@ -239,7 +239,8 @@ pub fn refresh_auth_blob(ide: &IdeKind, auth_blob_b64: &str) -> Result<String, R
     };
 
     let url = format!("{}/{}", api_host(*ide, &region), EXCHANGE_PATH);
-    let resp = ureq::post(&url)
+    let resp = super::http::agent()
+        .post(&url)
         // 续期是额度查询失败后的隐式阻塞点：无超时会整链挂死在前一步
         .timeout(std::time::Duration::from_secs(12))
         .set("Content-Type", "application/json")

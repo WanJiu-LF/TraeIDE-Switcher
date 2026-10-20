@@ -23,14 +23,40 @@ fn ide_tag(ide: IdeKind) -> &'static str {
     }
 }
 
+/// 协议文件的通道标签：主实例 = "trae"/"traecn"；多开实例 = "trae-<channel>"/"traecn-<channel>"。
+/// 两实例共用一个 %TEMP% 目录，不加通道后缀会互相抢同一触发文件。
+fn channel_tag(ide: IdeKind, channel: &str) -> String {
+    if channel.is_empty() {
+        ide_tag(ide).to_string()
+    } else {
+        format!("{}-{}", ide_tag(ide), channel)
+    }
+}
+
+fn trigger_file_ch(ide: IdeKind, channel: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("trae-ide-switcher-hotswap-{}.json", channel_tag(ide, channel)))
+}
+fn result_file_ch(ide: IdeKind, channel: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "trae-ide-switcher-hotswap-result-{}.json",
+        channel_tag(ide, channel)
+    ))
+}
+fn status_file_ch(ide: IdeKind, channel: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "trae-ide-switcher-shim-status-{}.json",
+        channel_tag(ide, channel)
+    ))
+}
+
 fn trigger_file(ide: IdeKind) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("trae-ide-switcher-hotswap-{}.json", ide_tag(ide)))
+    trigger_file_ch(ide, "")
 }
 fn result_file(ide: IdeKind) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("trae-ide-switcher-hotswap-result-{}.json", ide_tag(ide)))
+    result_file_ch(ide, "")
 }
 fn status_file(ide: IdeKind) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("trae-ide-switcher-shim-status-{}.json", ide_tag(ide)))
+    status_file_ch(ide, "")
 }
 
 /// 用户级扩展根目录：~/.trae/extensions（intl）/ ~/.trae-cn/extensions（CN）
@@ -44,8 +70,12 @@ fn extensions_root(ide: IdeKind) -> std::path::PathBuf {
     }
 }
 
+fn ext_dir_at(root: &std::path::Path) -> std::path::PathBuf {
+    root.join(format!("{SHIM_EXT_ID}-{SHIM_VERSION}"))
+}
+
 fn ext_dir(ide: IdeKind) -> std::path::PathBuf {
-    extensions_root(ide).join(format!("{SHIM_EXT_ID}-{SHIM_VERSION}"))
+    ext_dir_at(&extensions_root(ide))
 }
 
 const EXT_JS: &str = r#"// trae-ide-switcher shim：扩展宿主内的无感换号监听器
@@ -55,11 +85,12 @@ const path = require('path');
 const vscode = require('vscode');
 
 const SHIM_VERSION = '__SHIM_VERSION__';
-// __dirname 含 .trae-cn 时为 CN 版，协议文件按 IDE 分离避免双开互踩
-const IDE_TAG = __dirname.replace(/\\/g, '/').indexOf('/.trae-cn/') !== -1 ? 'traecn' : 'trae';
-const TRIGGER_FILE = path.join(os.tmpdir(), 'trae-ide-switcher-hotswap-' + IDE_TAG + '.json');
-const RESULT_FILE = path.join(os.tmpdir(), 'trae-ide-switcher-hotswap-result-' + IDE_TAG + '.json');
-const STATUS_FILE = path.join(os.tmpdir(), 'trae-ide-switcher-shim-status-' + IDE_TAG + '.json');
+// 通道标识（安装时注入）：主实例 'trae' / 'traecn'；多开实例 'trae-<accountId>' 等。
+// 由安装方按扩展目录决定，不再嗅探 __dirname（多开实例目录里没有 .trae-cn 段）
+const IDE_CHANNEL = __SHIM_CHANNEL__;
+const TRIGGER_FILE = path.join(os.tmpdir(), 'trae-ide-switcher-hotswap-' + IDE_CHANNEL + '.json');
+const RESULT_FILE = path.join(os.tmpdir(), 'trae-ide-switcher-hotswap-result-' + IDE_CHANNEL + '.json');
+const STATUS_FILE = path.join(os.tmpdir(), 'trae-ide-switcher-shim-status-' + IDE_CHANNEL + '.json');
 const POLL_INTERVAL_MS = 400;
 const HEARTBEAT_INTERVAL_MS = 30000;
 
@@ -180,9 +211,9 @@ fn ext_pkg_json() -> String {
     .to_string()
 }
 
-/// 把 shim 登记进 extensions.json —— Trae 只加载登记过的扩展
-fn register_extensions_json(ide: IdeKind) -> io::Result<()> {
-    let path = extensions_root(ide).join("extensions.json");
+/// 把 shim 登记进指定扩展根下的 extensions.json —— Trae 只加载登记过的扩展
+fn register_at(root: &std::path::Path) -> io::Result<()> {
+    let path = root.join("extensions.json");
     let mut arr: Vec<Value> = match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str::<Value>(&s)
             .ok()
@@ -197,7 +228,7 @@ fn register_extensions_json(ide: IdeKind) -> io::Result<()> {
             .and_then(|v| v.as_str())
             != Some(SHIM_EXT_ID)
     });
-    let dir = ext_dir(ide);
+    let dir = ext_dir_at(root);
     let uri_path = format!("/{}", dir.to_string_lossy().replace('\\', "/"));
     arr.push(json!({
         "identifier": { "id": SHIM_EXT_ID, "uuid": SHIM_EXT_UUID },
@@ -245,18 +276,38 @@ fn unregister_extensions_json(ide: IdeKind) {
     }
 }
 
-/// 安装 shim（写扩展文件 + 登记；重启 Trae 后激活）
-pub fn install(ide: IdeKind) -> io::Result<String> {
-    let dir = ext_dir(ide);
+/// 写入 shim 扩展文件（channel 决定协议文件后缀：空 = 主实例，非空 = 多开实例）
+fn write_extension(root: &std::path::Path, ide: IdeKind, channel: &str) -> io::Result<()> {
+    let dir = ext_dir_at(root);
     std::fs::create_dir_all(&dir)?;
-    let js = EXT_JS.replace("__SHIM_VERSION__", SHIM_VERSION);
+    // 注入与 Rust 侧一致的通道串（'trae' / 'traecn' / 'trae-<ch>'…）：不嗅探目录，
+    // 多开实例的目录里既没有 .trae-cn 段也无法区分版本，必须由安装方显式告知
+    let tag = channel_tag(ide, channel);
+    let js = EXT_JS
+        .replace("__SHIM_VERSION__", SHIM_VERSION)
+        .replace("__SHIM_CHANNEL__", &format!("'{tag}'"));
     std::fs::write(dir.join("package.json"), ext_pkg_json())?;
     std::fs::write(dir.join("extension.js"), js)?;
-    register_extensions_json(ide)?;
+    Ok(())
+}
+
+/// 安装 shim（写扩展文件 + 登记；重启 Trae 后激活）
+pub fn install(ide: IdeKind) -> io::Result<String> {
+    let root = extensions_root(ide);
+    write_extension(&root, ide, "")?;
+    register_at(&root)?;
     Ok(format!("已安装切换助手 v{SHIM_VERSION}，重启 {}/extensions 后生效", match ide {
         IdeKind::Trae => ".trae",
         IdeKind::TraeCn => ".trae-cn",
     }))
+}
+
+/// 把 shim 装进多开实例的独立扩展目录（channel 非空 → 协议文件与主实例分离，
+/// 两个实例可各自无感换号而不互相抢触发文件）
+pub fn install_isolated(ide: IdeKind, instance_dir: &std::path::Path, channel: &str) -> io::Result<()> {
+    let root = instance_dir.join("extensions");
+    write_extension(&root, ide, channel)?;
+    register_at(&root)
 }
 
 /// 卸载 shim（删目录 + 反登记 + 清协议文件）
@@ -326,9 +377,19 @@ static HOTSWAP_LOCK: Mutex<()> = Mutex::new(());
 /// 热切换请求：清旧 result → 写 trigger → 轮询 result（默认 5s 超时）
 /// 串行锁防并发写踩；返回 shim result JSON。
 pub fn request_hot_swap(ide: IdeKind, payload: &Value, timeout_ms: u64) -> Result<Value, String> {
+    request_hot_swap_ch(ide, "", payload, timeout_ms)
+}
+
+/// 带通道的热切换请求（channel 为空 = 主实例；非空 = 对应的多开实例）
+pub fn request_hot_swap_ch(
+    ide: IdeKind,
+    channel: &str,
+    payload: &Value,
+    timeout_ms: u64,
+) -> Result<Value, String> {
     let _g = HOTSWAP_LOCK.lock().map_err(|_| "hotswap 锁中毒")?;
-    let trig = trigger_file(ide);
-    let res = result_file(ide);
+    let trig = trigger_file_ch(ide, channel);
+    let res = result_file_ch(ide, channel);
     let _ = std::fs::remove_file(&res);
 
     let mut p = payload.clone();

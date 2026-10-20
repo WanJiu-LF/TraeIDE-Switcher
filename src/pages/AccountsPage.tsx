@@ -28,6 +28,8 @@ interface AccountsPageProps {
   onRelogin: () => void;
   /** 多开：独立 user-data 实例启动该账号 */
   onLaunchIsolated: (id: string) => void;
+  /** 在该账号的独立实例内无感换号 */
+  onSwitchIsolated: (id: string) => void;
   /** P0-2 批量操作 */
   onBatch: (action: "refresh" | "checkin" | "verify" | "delete", ids: string[]) => void;
   batchBusy: string | null;
@@ -87,6 +89,7 @@ export function AccountsPage(props: AccountsPageProps) {
     onPin,
     onRelogin,
     onLaunchIsolated,
+    onSwitchIsolated,
     onBatch,
     batchBusy,
   } = props;
@@ -120,8 +123,11 @@ export function AccountsPage(props: AccountsPageProps) {
   });
 
   const isCn = targetIde === "trae-cn";
+  // 国际版剩余 = 基础额度剩余 + 赠送额度剩余（两行口径合并；no_bonus_quota 时赠送为 0）
   const remainOf = (a: Account) =>
-    isCn ? a.credits?.total ?? 0 : Math.max(a.daily.total - a.daily.used, 0);
+    isCn
+      ? a.credits?.total ?? 0
+      : Math.max(a.daily.total - a.daily.used, 0) + Math.max(a.weekly.total - a.weekly.used, 0);
   // 置顶恒在最前，其余按所选维度排序
   const sorted = [...visible].sort((a, b) => {
     if ((a.pinned ?? false) !== (b.pinned ?? false)) return a.pinned ? -1 : 1;
@@ -129,17 +135,12 @@ export function AccountsPage(props: AccountsPageProps) {
     if (sort === "name") return a.name.localeCompare(b.name, "zh-CN");
     return 0;
   });
-  const poolRemain = isCn
-    ? pool.reduce((sum, a) => sum + (a.credits?.total ?? 0), 0)
-    : pool.reduce((sum, a) => sum + Math.max(a.daily.total - a.daily.used, 0), 0);
-  // 国际版额度以美元计（is_dollar_usage_billing）时带 $ 前缀，否则按次数
-  const dollar = !isCn && pool.some((a) => a.dollar === true);
+  const poolRemain = pool.reduce((sum, a) => sum + remainOf(a), 0);
+  // 国际版与 IDE 用量面板一致：一律按美元渲染（无"次数"口径，见 App.tsx applyQuota 逆向结论）
   const fmtRemain = (v: number) =>
     isCn
       ? v.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-      : dollar
-        ? `$${v.toFixed(2)}`
-        : v.toLocaleString("zh-CN");
+      : `$${v.toFixed(2)}`;
   const stamp = (ts: number) => {
     const d = new Date(ts * 1000);
     const p = (n: number) => String(n).padStart(2, "0");
@@ -157,6 +158,10 @@ export function AccountsPage(props: AccountsPageProps) {
   );
   const resetValue = isCn ? (businessExpire ? businessExpire.slice(0, 10).replace(/-/g, "/") : "—") : resetTs > 0 ? stamp(resetTs) : "—";
   const resetSub = isCn ? "积分按活动到期时间失效" : "按订阅周期重置（最早到期账号）";
+  // 凭据异常聚合：已过期（不可自愈）/ 设备不匹配（20403，换机后必现）
+  const expiredN = pool.filter((a) => a.credExpired).length;
+  const mismatchN = pool.filter((a) => a.deviceMismatch).length;
+  const credIssue = pool.filter((a) => a.credExpired || a.deviceMismatch).length;
 
   return (
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
@@ -175,9 +180,7 @@ export function AccountsPage(props: AccountsPageProps) {
         </div>
         <div className="ml-auto text-[11px] text-ink3">
           {isCn ? "总积分 " : "剩余额度 "}
-          <b className="font-mono text-ink text-[12px]">
-            {isCn || dollar ? fmtRemain(poolRemain) : `${poolRemain.toLocaleString("zh-CN")} 次`}
-          </b>
+          <b className="font-mono text-ink text-[12px]">{fmtRemain(poolRemain)}</b>
         </div>
       </div>
 
@@ -192,11 +195,20 @@ export function AccountsPage(props: AccountsPageProps) {
         <StatCard label="账号总数" value={String(pool.length)} sub={`${isCn ? "Trae CN" : "Trae"} 账号`} />
         <StatCard
           label="剩余总量"
-          value={isCn ? `${fmtRemain(poolRemain)} 积分` : dollar ? fmtRemain(poolRemain) : `${poolRemain.toLocaleString("zh-CN")} 次`}
-          sub={isCn ? "全部 CN 账号积分合计" : "全部账号基础额度合计"}
+          value={isCn ? `${fmtRemain(poolRemain)} 积分` : fmtRemain(poolRemain)}
+          sub={isCn ? "全部 CN 账号积分合计" : "全部账号基础额度 + 赠送额度合计"}
         />
         <StatCard label="下次额度重置" value={resetValue} sub={resetSub} />
       </div>
+
+      {credIssue > 0 && (
+        <div className="dropdown-in flex flex-wrap items-center gap-x-3 gap-y-1 mb-4 px-3.5 py-2.5 rounded-[10px] border border-[#f0dca6] bg-[#fff8e6] text-[12px] text-[#b8860b]">
+          <span className="font-semibold">凭据异常 {credIssue} 个</span>
+          {expiredN > 0 && <span>· 已过期 {expiredN} 个（无法自动续期）</span>}
+          {mismatchN > 0 && <span>· 设备不匹配 {mismatchN} 个（需在本机重新登录采集）</span>}
+          <span className="text-ink3">在账号卡片上可查看具体原因</span>
+        </div>
+      )}
 
       {/* 筛选行：整行占满（搜索框 flex-1 吸收全部剩余宽度，行尾齐平右边界），
           其余子项固定宽度且不可收缩 + whitespace-nowrap；窗口过窄时整体换行而非挤压折字 */}
@@ -346,6 +358,7 @@ export function AccountsPage(props: AccountsPageProps) {
               onPin={onPin}
               onRelogin={onRelogin}
               onLaunchIsolated={onLaunchIsolated}
+              onSwitchIsolated={onSwitchIsolated}
               onSwitch={onSwitch}
               onEdit={onEdit}
               onDelete={onDelete}

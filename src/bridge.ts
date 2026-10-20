@@ -16,6 +16,14 @@ export interface AccountSummary {
   threshold?: number | null;
   /** 本次入库是否覆盖了已存在的同 userId 账号 */
   replaced?: boolean;
+  /** 凭据 access token 到期时刻（epoch 毫秒） */
+  expires_at?: number | null;
+  /** 凭据已过期 */
+  cred_expired?: boolean;
+  /** 上次续期失败原因（如 20403 Token device not match） */
+  refresh_error?: string | null;
+  /** 上次续期失败为设备不匹配 */
+  device_mismatch?: boolean;
 }
 
 export interface PackQuota {
@@ -155,6 +163,25 @@ export async function importVaultBackup(path: string): Promise<string> {
   return invoke<string>("import_vault_backup", { path });
 }
 
+// ============ 可移植账号包（口令加密，跨机迁移）============
+
+export interface PortableExport {
+  path: string;
+  content: string;
+}
+
+/** 导出账号包：以口令重加密账号库，返回文件路径与账号包内容 */
+export async function exportPortable(passphrase: string): Promise<PortableExport> {
+  ensureTauri();
+  return JSON.parse(await invoke<string>("export_portable", { passphrase })) as PortableExport;
+}
+
+/** 导入账号包：source 为账号包内容或文件路径 */
+export async function importPortable(passphrase: string, source: string): Promise<string> {
+  ensureTauri();
+  return invoke<string>("import_portable", { passphrase, source });
+}
+
 // ============ P1-1 额度采样历史 ============
 
 export interface UsageSample {
@@ -228,6 +255,12 @@ export async function launchIsolatedInstance(
     dir: string;
     name: string;
   };
+}
+
+/** 在该账号的独立实例内无感换号（走实例自己的切换助手通道） */
+export async function switchIsolated(id: string): Promise<string> {
+  ensureTauri();
+  return invoke<string>("switch_isolated", { id });
 }
 
 // ============ 会话级用量明细（agent 本地 RPC）============
@@ -535,6 +568,10 @@ export interface AppSettings {
   switch_strategy: string;
   /** 自动换号范围："all"=全池 / "pinned"=只用置顶账号 */
   switch_scope: string;
+  /** HTTP 代理地址（如 http://127.0.0.1:7890）；空串 = 直连 */
+  http_proxy: string;
+  /** 自定义更新源（latest.json 地址）；空串 = 内置默认端点 */
+  update_endpoint: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -551,6 +588,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   daily_time: "09:00",
   switch_strategy: "order",
   switch_scope: "all",
+  http_proxy: "",
+  update_endpoint: "",
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -566,4 +605,20 @@ export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSe
 export async function autostart(enable: boolean): Promise<void> {
   if (!isTauri()) return;
   await invoke("autostart", { enable });
+}
+
+// ============ 应用内更新（走设置中的代理与自定义更新源）============
+
+export interface UpdateInfo {
+  available: boolean;
+  version?: string;
+  date?: string | null;
+  body?: string | null;
+  installed?: boolean;
+}
+
+/** 检查（install=false）或下载并安装（install=true）应用更新 */
+export async function appUpdate(install: boolean): Promise<UpdateInfo> {
+  ensureTauri();
+  return JSON.parse(await invoke<string>("app_update", { install })) as UpdateInfo;
 }
