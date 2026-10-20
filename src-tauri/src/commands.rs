@@ -1590,16 +1590,17 @@ fn claim_activity_rewards_impl(id: &str) -> CmdResult<String> {
 
 /// 1024 签到抽奖（活动 id `checkin_1024`）—— 逆向自 CN `main.js` 的 checkinLotteryController：
 /// 抽奖经主进程 `handleCommercialActivity` → `POST /trae/api/v2/ug/activity/action`
-/// （body: {activity_id, req_source}）。`via` 选择通道：
-/// - `shim`（默认）：IDE 原生命令 `workbench.action.icubeHandleCommercialActivity`
-///   —— 主进程做环境与资格校验（CN + MARSCODE + `checkin_1024` 已启用），与"活动领奖"同路；
-/// - `http`：本工具直呼 activity/action（对照用；历史实测直呼对领奖返回空 data）。
-/// 注意：原生命令以 IDE **当前登录账号** 身份执行、不携带目标账号 token；
-/// 非当前账号需先无感换号（前端批量抽奖据此编排）。
+/// （body: {activity_id, req_source}）。
+///
+/// **通道实测（2026-10-20 真机）**：`via=http` 直呼该接口对 `checkin_1024` **有效** ——
+/// 服务器按账号 token + 设备槽受理并返回该账号的 `work_extra`（含 prize_text/granted），
+/// 与 shim 通道结果一致；历史「直呼返回空 data」结论只适用于**领奖**场景，不适用于本活动。
+/// 因此前端默认 `via=http`：免切换、可并发；`via=shim` 保留为对照
+/// （原生命令以 IDE **当前登录账号**身份执行、不携带目标账号 token）。
 #[tauri::command]
 pub async fn draw_checkin_lottery(id: String, via: Option<String>) -> CmdResult<String> {
     tauri::async_runtime::spawn_blocking(move || {
-        draw_checkin_lottery_impl(&id, via.as_deref().unwrap_or("shim"))
+        draw_checkin_lottery_impl(&id, via.as_deref().unwrap_or("http"))
     })
     .await
     .map_err(err)?
@@ -1645,6 +1646,15 @@ fn draw_checkin_lottery_impl(id: &str, via: &str) -> CmdResult<String> {
         (code, v)
     };
     let ok = code.unwrap_or(0) == 0;
+    // http 通道的受理结果直接在 work_extra 里（无 code 包装）：prize_text/granted
+    let prize_text = raw
+        .pointer("/work_extra/prize_text")
+        .and_then(|x| x.as_str())
+        .map(String::from);
+    let granted = raw.pointer("/work_extra/granted").and_then(|x| x.as_bool());
+    let coupon_fen = raw
+        .pointer("/work_extra/coupon_face_amount_fen")
+        .and_then(|x| x.as_i64());
     crate::core::logger::log(
         if ok { Level::Info } else { Level::Warn },
         Source::Quota,
@@ -1661,6 +1671,9 @@ fn draw_checkin_lottery_impl(id: &str, via: &str) -> CmdResult<String> {
         "code": code,
         "isCurrent": is_current,
         "via": via,
+        "prizeText": prize_text,
+        "granted": granted,
+        "couponFen": coupon_fen,
         "raw": raw,
     })
     .to_string())

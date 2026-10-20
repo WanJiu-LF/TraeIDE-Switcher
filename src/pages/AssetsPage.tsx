@@ -3,6 +3,7 @@ import type { Account, Ide } from "../types";
 import {
   accountDevices,
   claimActivityRewards,
+  drawCheckinLottery,
   errText,
   icdrsLog,
   runtimeConfig,
@@ -544,6 +545,7 @@ export function AssetsPage({
   const [id, setId] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [claiming, setClaiming] = useState(false);
+  const [drawing, setDrawing] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [icdrs, setIcdrs] = useState<IcdrsLog | null>(null);
   /** 设备身份管理：该版本全部账号的随号设备资产（本地账号库读取，不发网络请求） */
@@ -662,6 +664,30 @@ export function AssetsPage({
     }
   };
 
+  // 1024 签到抽奖：直呼活动接口（账号自身 token + 设备槽），免切换、不依赖 Trae 运行
+  const drawLottery = async () => {
+    if (!id) return;
+    setDrawing(true);
+    try {
+      const r = await drawCheckinLottery(id);
+      if (!r.ok) {
+        onToast("error", "抽奖未通过", `业务码 ${r.code ?? "-"}`);
+      } else if ((r.couponFen ?? 0) > 0) {
+        onToast(
+          "success",
+          `中奖：${r.prizeText ?? ""}`,
+          `${((r.couponFen ?? 0) / 100).toFixed(0)} 元抵扣券已发放至 ${current?.name ?? "该账号"}`,
+        );
+      } else {
+        onToast("info", "已参与今日抽奖", r.prizeText ?? "未中奖，明日再来");
+      }
+    } catch (e) {
+      onToast("error", "抽奖失败", errText(e));
+    } finally {
+      setDrawing(false);
+    }
+  };
+
   const verify = async () => {
     if (!id) return;
     setVerifying(true);
@@ -774,6 +800,16 @@ export function AssetsPage({
             title="通过 Trae 自带入口领取奖励（需 Trae 处于运行中，且已安装无感换号支持）"
           >
             {claiming ? "领取中…" : `一键领取活动奖励${grantable.length ? `（${grantable.length}）` : ""}`}
+          </button>
+        )}
+        {isCn && (
+          <button
+            className="btn-primary"
+            disabled={!id || drawing}
+            onClick={drawLottery}
+            title="参与「1024 签到抽百万积分」每日抽奖：直呼活动接口，使用该账号自身身份，无需切换、无需 Trae 运行"
+          >
+            {drawing ? "抽奖中…" : "1024 抽奖"}
           </button>
         )}
         <button

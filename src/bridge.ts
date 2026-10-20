@@ -196,12 +196,19 @@ export interface LotteryResult {
   /** 是否以 IDE 当前登录账号执行（false 时结果属于别的账号） */
   isCurrent: boolean;
   via: string;
+  /** 中奖文案（http 通道从 work_extra 解出）；未中奖时为安慰文案 */
+  prizeText?: string | null;
+  /** 是否已发放（含历史已抽） */
+  granted?: boolean | null;
+  /** 抵扣券面额（分），仅中奖为抵扣券时有值 */
+  couponFen?: number | null;
   raw: unknown;
 }
 
 /** 参与「1024 签到抽百万积分」每日抽奖（活动 id: checkin_1024）。
- *  via=shim 走 IDE 原生命令（要求 Trae 运行中 + 切换助手在线），并以**当前登录账号**身份执行 */
-export async function drawCheckinLottery(id: string, via: "shim" | "http" = "shim"): Promise<LotteryResult> {
+ *  默认 via=http：直呼活动接口（账号 token + 设备槽），免切换、可并发；
+ *  via=shim 走 IDE 原生命令，以**当前登录账号**身份执行（需 Trae 运行中 + 切换助手在线） */
+export async function drawCheckinLottery(id: string, via: "shim" | "http" = "http"): Promise<LotteryResult> {
   ensureTauri();
   return JSON.parse(await invoke<string>("draw_checkin_lottery", { id, via })) as LotteryResult;
 }
