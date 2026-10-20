@@ -28,6 +28,7 @@ pub fn run() {
             commands::session_usage,
             commands::query_assets,
             commands::claim_activity_rewards,
+            commands::draw_checkin_lottery,
             commands::icdrs_log,
             commands::verify_account,
             commands::runtime_config,

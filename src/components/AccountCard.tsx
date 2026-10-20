@@ -18,6 +18,8 @@ interface AccountCardProps {
   onLaunchIsolated?: (id: string) => void;
   /** 在该账号的独立实例内无感换号（需先用「多开（独立实例）」启动过） */
   onSwitchIsolated?: (id: string) => void;
+  /** 参与 1024 签到抽奖（CN 专有） */
+  onDrawLottery?: (id: string) => void;
   onSwitch: (id: string) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
@@ -235,6 +237,7 @@ export function AccountCard({
   onRelogin,
   onLaunchIsolated,
   onSwitchIsolated,
+  onDrawLottery,
   onSwitch,
   onEdit,
   onDelete,
@@ -297,6 +300,16 @@ export function AccountCard({
           : "该账号尚未多开过，先用「多开（独立实例）」启动",
     },
     { label: "重新登录采集", action: () => onRelogin?.() },
+    // 1024 签到抽奖为 CN 专有活动：国际版不展示该入口
+    ...(account.ide === "trae-cn"
+      ? [
+          {
+            label: "1024 抽奖",
+            action: () => onDrawLottery?.(account.id),
+            title: "参与「1024 签到抽百万积分」每日抽奖（原生命令以 IDE 当前账号身份执行）",
+          },
+        ]
+      : []),
     { label: "刷新额度", action: () => onRefresh(account.id) },
     { label: "编辑", action: () => onEdit(account.id) },
     { label: "删除", action: () => onDelete(account.id), danger: true },

@@ -10,6 +10,7 @@ import {
   claimCheckin,
   coldSwitchRestart,
   deleteAccount,
+  drawCheckinLottery,
   DEFAULT_SETTINGS,
   errText,
   getLogs,
@@ -606,8 +607,24 @@ export default function App() {
     }
   };
 
+  // 1024 签到抽奖（CN 专有）：走 IDE 原生命令，以**当前登录账号**身份执行；
+  // 中奖结果由客户端弹窗展示，此处只能确认是否受理（业务码 0）
+  const handleDrawLottery = async (id: string) => {
+    const acc = accounts.find((a) => a.id === id);
+    try {
+      const r = await drawCheckinLottery(id);
+      if (r.ok) {
+        pushToast("success", `${acc?.name ?? ""} 已参与 1024 抽奖`, "结果见 Trae 客户端弹窗");
+      } else {
+        pushToast("error", `${acc?.name ?? ""} 抽奖未通过`, `业务码 ${r.code ?? "-"}`);
+      }
+    } catch (e) {
+      pushToast("error", "抽奖失败，请确认 Trae 运行中且切换助手在线", errText(e));
+    }
+  };
+
   // P0-2 批量操作：选中的账号并发执行（各命令本身按账号幂等，并发即最短耗时）
-  const handleBatch = async (action: "refresh" | "checkin" | "verify" | "delete", ids: string[]) => {
+  const handleBatch = async (action: "refresh" | "checkin" | "verify" | "delete" | "lottery", ids: string[]) => {
     if (ids.length === 0) return;
     setBatchBusy(action);
     try {
@@ -637,6 +654,34 @@ export default function App() {
             return acc ? loadQuota(i, acc.ide).catch(() => undefined) : Promise.resolve();
           }),
         );
+      } else if (action === "lottery") {
+        // 原生命令以 IDE 当前账号身份执行 → 逐个无感换号后再抽，结束后回到起始账号
+        const start = currentId;
+        let cur = currentId;
+        let ok = 0;
+        for (const i of ids) {
+          const acc = accounts.find((a) => a.id === i);
+          if (!acc || acc.ide !== "trae-cn") continue;
+          try {
+            if (cur !== i) {
+              await switchAccount(i, true);
+              cur = i;
+              await new Promise((r) => setTimeout(r, 2500));
+            }
+            if ((await drawCheckinLottery(i)).ok) ok++;
+          } catch {
+            // 单个账号失败不中断整批
+          }
+        }
+        if (start && start !== cur) {
+          try {
+            await switchAccount(start, true);
+          } catch {
+            // 还原失败时提示（用户可手动切回）
+          }
+        }
+        fetchIdeStatus(targetIde).then((s) => setStatus({ ide: targetIde, s })).catch(() => undefined);
+        pushToast("info", `1024 抽奖完成：${ok}/${ids.length} 已参与`, "中奖结果见 Trae 客户端弹窗");
       } else {
         const res = await Promise.all(ids.map((i) => verifyAccount(i).then((v) => v.valid === true).catch(() => false)));
         pushToast("info", `登录状态检查 ${res.filter(Boolean).length}/${ids.length} 通过`);
@@ -767,6 +812,7 @@ export default function App() {
             onRelogin={() => openAddDialog({ tab: "login" })}
             onLaunchIsolated={handleLaunchIsolated}
             onSwitchIsolated={handleSwitchIsolated}
+            onDrawLottery={handleDrawLottery}
             onBatch={handleBatch}
             batchBusy={batchBusy}
           />

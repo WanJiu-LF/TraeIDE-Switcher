@@ -1588,6 +1588,84 @@ fn claim_activity_rewards_impl(id: &str) -> CmdResult<String> {
     Ok(json!({ "grantable": ids, "landed": landed, "results": results }).to_string())
 }
 
+/// 1024 签到抽奖（活动 id `checkin_1024`）—— 逆向自 CN `main.js` 的 checkinLotteryController：
+/// 抽奖经主进程 `handleCommercialActivity` → `POST /trae/api/v2/ug/activity/action`
+/// （body: {activity_id, req_source}）。`via` 选择通道：
+/// - `shim`（默认）：IDE 原生命令 `workbench.action.icubeHandleCommercialActivity`
+///   —— 主进程做环境与资格校验（CN + MARSCODE + `checkin_1024` 已启用），与"活动领奖"同路；
+/// - `http`：本工具直呼 activity/action（对照用；历史实测直呼对领奖返回空 data）。
+/// 注意：原生命令以 IDE **当前登录账号** 身份执行、不携带目标账号 token；
+/// 非当前账号需先无感换号（前端批量抽奖据此编排）。
+#[tauri::command]
+pub async fn draw_checkin_lottery(id: String, via: Option<String>) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        draw_checkin_lottery_impl(&id, via.as_deref().unwrap_or("shim"))
+    })
+    .await
+    .map_err(err)?
+}
+
+const CHECKIN_LOTTERY_AID: &str = "checkin_1024";
+
+fn draw_checkin_lottery_impl(id: &str, via: &str) -> CmdResult<String> {
+    use crate::core::logger::{Level, Source};
+    let c = load_ctx(id)?;
+    if c.bundle.ide != IdeKind::TraeCn {
+        return Err("1024 签到抽奖仅支持 Trae 国内版".into());
+    }
+    let is_current = switch::scan_current(&c.bundle.ide)
+        .ok()
+        .flatten()
+        .map(|b| b.id)
+        .as_deref()
+        == Some(c.bundle.id.as_str());
+    let (code, raw) = if via == "http" {
+        let v = c
+            .client
+            .activity_action(&c.token, &c.device, CHECKIN_LOTTERY_AID)
+            .map_err(err)?;
+        let code = v
+            .pointer("/data/code")
+            .and_then(|x| x.as_i64())
+            .or_else(|| v.get("code").and_then(|x| x.as_i64()));
+        (code, v)
+    } else {
+        let r = shim_request(
+            c.bundle.ide,
+            "invoke",
+            json!({
+                "command": "workbench.action.icubeHandleCommercialActivity",
+                "args": [{ "activity_id": CHECKIN_LOTTERY_AID }],
+                "timeout_ms": 8000,
+            }),
+            12_000,
+        )?;
+        let v = r.get("value").cloned().unwrap_or(Value::Null);
+        let code = v.pointer("/data/code").and_then(|x| x.as_i64());
+        (code, v)
+    };
+    let ok = code.unwrap_or(0) == 0;
+    crate::core::logger::log(
+        if ok { Level::Info } else { Level::Warn },
+        Source::Quota,
+        format!(
+            "{} 1024 抽奖（{via}{}）{} → {}",
+            c.bundle.name,
+            if is_current { "" } else { "，非当前账号" },
+            if ok { "已参与" } else { "业务失败" },
+            truncate(&raw.to_string(), 300)
+        ),
+    );
+    Ok(json!({
+        "ok": ok,
+        "code": code,
+        "isCurrent": is_current,
+        "via": via,
+        "raw": raw,
+    })
+    .to_string())
+}
+
 /// 日志截断：保留前 n 个字符（按字符边界切，避免 UTF-8 半字符 panic）
 fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n {

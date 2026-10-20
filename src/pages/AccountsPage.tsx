@@ -30,8 +30,10 @@ interface AccountsPageProps {
   onLaunchIsolated: (id: string) => void;
   /** 在该账号的独立实例内无感换号 */
   onSwitchIsolated: (id: string) => void;
+  /** 参与 1024 签到抽奖（CN 专有；原生命令以 IDE 当前账号身份执行） */
+  onDrawLottery: (id: string) => void;
   /** P0-2 批量操作 */
-  onBatch: (action: "refresh" | "checkin" | "verify" | "delete", ids: string[]) => void;
+  onBatch: (action: "refresh" | "checkin" | "verify" | "delete" | "lottery", ids: string[]) => void;
   batchBusy: string | null;
 }
 
@@ -90,6 +92,7 @@ export function AccountsPage(props: AccountsPageProps) {
     onRelogin,
     onLaunchIsolated,
     onSwitchIsolated,
+    onDrawLottery,
     onBatch,
     batchBusy,
   } = props;
@@ -306,6 +309,16 @@ export function AccountsPage(props: AccountsPageProps) {
               {batchBusy === "checkin" ? "签到中…" : "批量签到"}
             </button>
           )}
+          {/* 1024 签到抽奖为 CN 专有活动：国际版不展示该入口 */}
+          {isCn && (
+            <button
+              className="btn-ghost flex-none whitespace-nowrap disabled:opacity-50"
+              disabled={!sel.length || batchBusy !== null}
+              onClick={() => onBatch("lottery", sel)}
+            >
+              {batchBusy === "lottery" ? "抽奖中…" : "批量抽奖"}
+            </button>
+          )}
           <button
             className="btn-ghost flex-none whitespace-nowrap disabled:opacity-50"
             disabled={!sel.length || batchBusy !== null}
@@ -368,6 +381,7 @@ export function AccountsPage(props: AccountsPageProps) {
               onRelogin={onRelogin}
               onLaunchIsolated={onLaunchIsolated}
               onSwitchIsolated={onSwitchIsolated}
+              onDrawLottery={onDrawLottery}
               onSwitch={onSwitch}
               onEdit={onEdit}
               onDelete={onDelete}

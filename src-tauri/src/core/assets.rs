@@ -102,6 +102,25 @@ impl AssetsClient {
             json!({ "req_source": 1 }),
         )
     }
+
+    /// 活动动作（activity/action）：body = activity_id + req_source（ug 主机）。
+    /// 逆向自 CN main.js `_requestCommercialActivity`：
+    /// `data: {...(r?{activity_id:r}:{}), req_source: ti?2:1}`，`ti` 为 Trae Work 客户端。
+    pub fn activity_action(
+        &self,
+        token: &str,
+        device_id: &str,
+        activity_id: &str,
+    ) -> Result<Value, QuotaError> {
+        post_authed(
+            &self.ug_base,
+            "/trae/api/v2/ug/activity/action",
+            token,
+            device_id,
+            &self.version,
+            json!({ "activity_id": activity_id, "req_source": 1 }),
+        )
+    }
 }
 
 /// 运行时配置视图（A4）：把 IDE product.json 的 iCubeApp/bootConfig 关键项暴露给 UI。
