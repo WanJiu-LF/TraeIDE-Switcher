@@ -323,7 +323,7 @@ export function SettingsPage({ targetIde, onToast, onSettings, onReload }: Setti
             onChange={(v) => apply({ threshold: v })}
           />
         </Row>
-        <Row title="额度刷新间隔" desc="自动查询各账号剩余额度的间隔">
+        <Row title="额度刷新间隔" desc="自动刷新全部账号额度、凭据状态与增值数据的间隔；同时用于自动换号判定">
           <Seg
             options={[
               { value: 1, label: "1 分钟" },

@@ -40,6 +40,8 @@ interface AssetsPageProps {
   onToast: (kind: "success" | "error" | "info", title: string, desc?: string) => void;
   /** 校验后账号状态已写回后端，通知外层重载账号列表 */
   onReload?: () => void;
+  /** 本地数据轮询间隔（毫秒，来自外层的额度刷新间隔）；<=0 表示不轮询 */
+  refreshMs: number;
 }
 
 // ── 活动中文名与说明（activity_id 为服务端口径，此处做面向用户的转译） ──
@@ -536,6 +538,7 @@ export function AssetsPage({
   onRefresh,
   onToast,
   onReload,
+  refreshMs,
 }: AssetsPageProps) {
   const pool = useMemo(() => accounts.filter((a) => a.ide === targetIde), [accounts, targetIde]);
   const [id, setId] = useState("");
@@ -568,57 +571,55 @@ export function AssetsPage({
     setVerdict(null);
   }, [id]);
 
+  // 本地数据读取（不发业务网络请求）：额度采样序列 / 设备日志 / 随号设备资产。
+  // 首次进入与定时轮询共用同一实现，避免两处各写一份
+  const loadSeries = async (accountId: string) => {
+    try {
+      setSeries(await usageHistory(accountId));
+    } catch {
+      setSeries([]);
+    }
+  };
+  const loadIcdrsAndDevices = async (ide: Ide) => {
+    const [a, b] = await Promise.allSettled([icdrsLog(ide), accountDevices(ide)]);
+    setIcdrs(a.status === "fulfilled" ? a.value : null);
+    setDevices(b.status === "fulfilled" ? b.value : null);
+  };
+
   // P1-1 采样序列：本地文件读取，随账号切换重新取
   useEffect(() => {
-    let disposed = false;
     if (!id) {
       setSeries([]);
       return;
     }
-    usageHistory(id)
-      .then((s) => {
-        if (!disposed) setSeries(s);
-      })
-      .catch(() => {
-        if (!disposed) setSeries([]);
-      });
-    return () => {
-      disposed = true;
-    };
+    void loadSeries(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
-    let disposed = false;
     setIcdrs(null);
     setCfg(null);
     setCmds(null);
     setCmdResult("");
     setDevices(null);
-    icdrsLog(targetIde)
-      .then((v) => {
-        if (!disposed) setIcdrs(v);
-      })
-      .catch(() => {
-        if (!disposed) setIcdrs(null);
-      });
-    accountDevices(targetIde)
-      .then((v) => {
-        if (!disposed) setDevices(v);
-      })
-      .catch(() => {
-        if (!disposed) setDevices(null);
-      });
+    void loadIcdrsAndDevices(targetIde);
     runtimeConfig(targetIde)
-      .then((v) => {
-        if (!disposed) setCfg(v);
-      })
-      .catch(() => {
-        if (!disposed) setCfg(null);
-      });
-    return () => {
-      disposed = true;
-    };
+      .then(setCfg)
+      .catch(() => setCfg(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetIde]);
+
+  // 定时轮询：采样序列（趋势图末点）与设备日志/设备资产（均为本地读取，开销低）。
+  // 运行配置 product.json 属静态文件，不轮询
+  useEffect(() => {
+    if (refreshMs <= 0) return;
+    const timer = setInterval(() => {
+      if (id) void loadSeries(id);
+      void loadIcdrsAndDevices(targetIde);
+    }, refreshMs);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshMs, targetIde, id]);
 
   const current = pool.find((a) => a.id === id);
   // 资产来自外层缓存（后台预取），进入页面直接渲染既有结果

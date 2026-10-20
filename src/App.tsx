@@ -99,6 +99,24 @@ function toUiAccount(s: AccountSummary): Account {
   };
 }
 
+/** 用最新摘要覆盖卡片的"摘要字段"，保留已拉取的额度/签到/错误提示（整表重建会清空这些值导致轮询闪烁） */
+function mergeSummary(a: Account, s: AccountSummary): Account {
+  return {
+    ...a,
+    name: s.name,
+    email: s.email,
+    initial: s.name.slice(0, 1),
+    note: s.note,
+    status: STATUS_MAP[s.status],
+    pinned: s.pinned ?? false,
+    threshold: s.threshold ?? null,
+    expiresAt: s.expires_at ?? null,
+    credExpired: s.cred_expired ?? false,
+    refreshError: s.refresh_error ?? null,
+    deviceMismatch: s.device_mismatch ?? false,
+  };
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>("accounts");
   const [collapsedPref, setCollapsedPref] = useState(() => localStorage.getItem(COLLAPSED_KEY) === "1");
@@ -133,6 +151,8 @@ export default function App() {
   const [editing, setEditing] = useState<Account | null>(null);
   const toastSeq = useRef(0);
   const settingsRef = useRef(settings);
+  // 账号池镜像：供定时轮询读取最新列表（不把 accounts 放进定时器依赖，避免每次变动重建定时器）
+  const accountsRef = useRef<Account[]>([]);
 
   const collapsed = narrow || collapsedPref;
   const ideStatus = status?.ide === targetIde ? status.s : null;
@@ -257,6 +277,10 @@ export default function App() {
   }, [settings]);
 
   useEffect(() => {
+    accountsRef.current = accounts;
+  }, [accounts]);
+
+  useEffect(() => {
     getSettings()
       .then(setSettings)
       .catch((e) => pushToast("error", "设置读取失败，请重新打开本软件", errText(e)));
@@ -318,11 +342,17 @@ export default function App() {
     };
   }, [targetIde]);
 
-  // 账号池重载：首次加载与外部触发（如增值页校验后状态已写回后端）共用
+  // 账号池重载：首次加载与外部触发（如导入账号包、批量校验后状态已写回后端）共用。
+  // 与既有卡片做字段级合并而非整表重建：避免把已拉到的额度/签到/错误提示清空造成闪烁
   const reloadAccounts = async () => {
     try {
       const list = await listAccounts();
-      setAccounts(list.map(toUiAccount));
+      setAccounts((prev) =>
+        list.map((s) => {
+          const old = prev.find((a) => a.id === s.id);
+          return old ? mergeSummary(old, s) : toUiAccount(s);
+        }),
+      );
       // 并发拉取：原先 for-await 串行，账号数 × 每号 1~2 个请求全部排队叠加
       void Promise.all(list.map((s) => loadQuota(s.id, s.ide).catch(() => undefined)));
       prefetchAssets(list);
@@ -331,8 +361,23 @@ export default function App() {
     }
   };
 
+  // 账号摘要轮询：只更新名称/备注/置顶/阈值/凭据到期与设备不匹配标记，不触碰额度数值
+  const syncSummaries = async () => {
+    try {
+      const list = await listAccounts();
+      setAccounts((prev) =>
+        prev.map((a) => {
+          const s = list.find((x) => x.id === a.id);
+          return s ? mergeSummary(a, s) : a;
+        }),
+      );
+    } catch {
+      // 轮询失败静默：不打断界面，下一轮再试
+    }
+  };
+
   // 资产后台预取：不阻塞 UI、不进页面才拉；失败静默（页面用缓存渲染，可手动刷新）
-  const prefetchAssets = (list: AccountSummary[]) => {
+  const prefetchAssets = (list: { id: string }[]) => {
     void Promise.all(
       list.map((s) =>
         queryAssets(s.id)
@@ -429,6 +474,25 @@ export default function App() {
     // refreshHealth 每轮重建，但语义上只依赖 targetIde
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetIde]);
+
+  // 定时轮询（间隔 = 设置里的"额度刷新间隔"）：账号摘要 → 额度 → 资产。
+  // 顺序固定：摘要先落盘，额度查询失败的标红状态才不会被摘要里的 vault 状态覆盖掉。
+  // 摘要（凭据到期/设备不匹配）、额度（卡片数字/趋势）、资产（增值页）此前都只在首次进入时拉一次
+  useEffect(() => {
+    if (!isTauri()) return;
+    const ms = Math.max(1, settings.refresh_interval) * 60_000;
+    const timer = setInterval(() => {
+      void (async () => {
+        await syncSummaries();
+        const list = accountsRef.current;
+        await Promise.all(list.map((a) => loadQuota(a.id, a.ide).catch(() => undefined)));
+        prefetchAssets(list);
+      })();
+    }, ms);
+    return () => clearInterval(timer);
+    // syncSummaries/loadQuota/prefetchAssets 每轮重建，但只依赖 setState 与 ref，语义上只依赖间隔
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.refresh_interval]);
 
   useEffect(() => {
     void reloadAccounts();
@@ -714,6 +778,7 @@ export default function App() {
             onRefresh={refreshAssets}
             onToast={pushToast}
             onReload={reloadAccounts}
+            refreshMs={Math.max(1, settings.refresh_interval) * 60_000}
           />
         )}
         {page === "health" && (
