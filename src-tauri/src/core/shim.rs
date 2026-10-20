@@ -332,6 +332,38 @@ pub struct ShimStatus {
     pub last_heartbeat: Option<u128>,
 }
 
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// 读取该通道心跳文件里的时间戳（无文件/坏 JSON/无字段 → None）
+fn heartbeat_at(ide: IdeKind, channel: &str) -> Option<u128> {
+    let s = std::fs::read_to_string(status_file_ch(ide, channel)).ok()?;
+    let v: Value = serde_json::from_str(&s).ok()?;
+    v["at"].as_u64().map(|x| x as u128)
+}
+
+/// 通道心跳是否新鲜（存活判定阈值 90s）
+fn heartbeat_alive(ide: IdeKind, channel: &str) -> bool {
+    heartbeat_at(ide, channel)
+        .map(|at| now_ms().saturating_sub(at) < HEARTBEAT_ALIVE_MS)
+        .unwrap_or(false)
+}
+
+/// 多开实例的切换助手是否在线：该实例扩展目录已装 shim + 其通道心跳新鲜。
+/// 多开实例与主实例共用同一个 exe 名，进程列表无法区分是哪个实例，
+/// 心跳是唯一可靠的「该实例正在运行且通道可用」信号
+pub fn isolated_alive(ide: IdeKind, instance_dir: &std::path::Path, channel: &str) -> bool {
+    let dir = ext_dir_at(&instance_dir.join("extensions"));
+    if !dir.join("package.json").exists() {
+        return false;
+    }
+    heartbeat_alive(ide, channel)
+}
+
 /// 状态：是否安装（package.json name 校验）+ 心跳是否 <90s
 pub fn status(ide: IdeKind) -> ShimStatus {
     let dir = ext_dir(ide);
@@ -349,25 +381,12 @@ pub fn status(ide: IdeKind) -> ShimStatus {
             }
         }
     }
-    let mut alive = false;
-    let mut last_heartbeat = None;
-    if let Ok(s) = std::fs::read_to_string(status_file(ide)) {
-        if let Ok(v) = serde_json::from_str::<Value>(&s) {
-            if let Some(at) = v["at"].as_u64() {
-                last_heartbeat = Some(at as u128);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0);
-                alive = now.saturating_sub(at as u128) < HEARTBEAT_ALIVE_MS;
-            }
-        }
-    }
+    let last_heartbeat = heartbeat_at(ide, "");
     ShimStatus {
         installed,
         installed_version,
         target_version: SHIM_VERSION.to_string(),
-        alive,
+        alive: heartbeat_alive(ide, ""),
         last_heartbeat,
     }
 }

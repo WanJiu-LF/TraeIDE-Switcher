@@ -32,6 +32,10 @@ export interface Account {
   refreshError?: string | null;
   /** 上次续期失败为设备不匹配 */
   deviceMismatch?: boolean;
+  /** 已创建过独立实例数据目录（多开过） */
+  instanceExists?: boolean;
+  /** 独立实例当前在运行（切换助手通道在线） */
+  instanceAlive?: boolean;
   daily: Quota;
   weekly: Quota;
   resetText: string;

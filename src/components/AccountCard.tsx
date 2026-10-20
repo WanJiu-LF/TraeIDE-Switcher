@@ -274,11 +274,28 @@ export function AccountCard({
     setMenuOpen(true);
   };
 
-  const menuItems: { label: string; action: () => void; danger?: boolean }[] = [
+  // 多开实例在线才允许"在独立实例中切换"（同 exe 名无法从进程区分实例，以通道心跳为准）
+  const canSwitchIsolated = account.instanceAlive === true;
+  const menuItems: {
+    label: string;
+    action: () => void;
+    danger?: boolean;
+    disabled?: boolean;
+    title?: string;
+  }[] = [
     { label: account.pinned ? "取消置顶" : "置顶显示", action: () => onPin?.(account.id, !account.pinned) },
     { label: "切换到此账号", action: () => onSwitch(account.id) },
     { label: "多开（独立实例）", action: () => onLaunchIsolated?.(account.id) },
-    { label: "在独立实例中切换", action: () => onSwitchIsolated?.(account.id) },
+    {
+      label: "在独立实例中切换",
+      action: () => onSwitchIsolated?.(account.id),
+      disabled: !canSwitchIsolated,
+      title: canSwitchIsolated
+        ? "在该账号的独立实例内无感换号（不影响主实例）"
+        : account.instanceExists
+          ? "该账号的独立实例未在运行，先用「多开（独立实例）」启动"
+          : "该账号尚未多开过，先用「多开（独立实例）」启动",
+    },
     { label: "重新登录采集", action: () => onRelogin?.() },
     { label: "刷新额度", action: () => onRefresh(account.id) },
     { label: "编辑", action: () => onEdit(account.id) },
@@ -344,13 +361,16 @@ export function AccountCard({
                 {menuItems.map((m, i) => (
                   <button
                     key={m.label}
-                    className={`menu-item-in w-full text-left px-3.5 py-[7px] text-[12px] cursor-pointer transition-colors duration-150 hover:bg-[#f0f6f7] ${
-                      m.danger ? "text-bad" : "text-ink2"
+                    className={`menu-item-in w-full text-left px-3.5 py-[7px] text-[12px] transition-colors duration-150 ${
+                      m.disabled
+                        ? "text-ink3 cursor-not-allowed"
+                        : `cursor-pointer hover:bg-[#f0f6f7] ${m.danger ? "text-bad" : "text-ink2"}`
                     }`}
+                    title={m.title}
                     style={menuClosing ? undefined : { animationDelay: `${i * 18}ms` }}
                     onClick={() => {
                       closeMenu();
-                      m.action();
+                      if (!m.disabled) m.action();
                     }}
                   >
                     {m.label}
@@ -389,6 +409,14 @@ export function AccountCard({
             title="该账号独立设置：剩余额度低于此百分比时自动换号"
           >
             低于 {account.threshold}% 自动换号
+          </span>
+        )}
+        {account.instanceAlive && (
+          <span
+            className="text-[10.5px] px-2 py-0.5 rounded-full border border-accent-line text-accent bg-accent-soft"
+            title="该账号的独立实例正在运行，可在实例内无感换号（不影响主实例）"
+          >
+            独立实例运行中
           </span>
         )}
       </div>

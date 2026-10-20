@@ -162,6 +162,8 @@ export function AccountsPage(props: AccountsPageProps) {
   const expiredN = pool.filter((a) => a.credExpired).length;
   const mismatchN = pool.filter((a) => a.deviceMismatch).length;
   const credIssue = pool.filter((a) => a.credExpired || a.deviceMismatch).length;
+  // 独立实例运行中（以切换助手通道心跳为准）
+  const instanceN = pool.filter((a) => a.instanceAlive).length;
 
   return (
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
@@ -207,6 +209,13 @@ export function AccountsPage(props: AccountsPageProps) {
           {expiredN > 0 && <span>· 已过期 {expiredN} 个（无法自动续期）</span>}
           {mismatchN > 0 && <span>· 设备不匹配 {mismatchN} 个（需在本机重新登录采集）</span>}
           <span className="text-ink3">在账号卡片上可查看具体原因</span>
+        </div>
+      )}
+
+      {instanceN > 0 && (
+        <div className="dropdown-in flex flex-wrap items-center gap-x-3 gap-y-1 mb-4 px-3.5 py-2.5 rounded-[10px] border border-accent-line bg-accent-soft text-[12px] text-accent">
+          <span className="font-semibold">独立实例运行中 {instanceN} 个</span>
+          <span className="text-ink3">在对应账号卡片的「···」里选「在独立实例中切换」，可在实例内换号（不影响主实例）</span>
         </div>
       )}
 

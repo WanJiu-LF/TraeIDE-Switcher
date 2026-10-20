@@ -35,6 +35,10 @@ pub struct AccountSummary {
     pub refresh_error: Option<String>,
     /// 上次续期失败是否为设备不匹配（refreshToken 绑定签发设备，换机后必现）
     pub device_mismatch: bool,
+    /// 该账号是否已创建过独立实例数据目录（多开过一次）
+    pub instance_exists: bool,
+    /// 该账号的独立实例当前是否在运行（其切换助手通道心跳新鲜）
+    pub instance_alive: bool,
 }
 
 fn to_summary(b: &AccountBundle) -> AccountSummary {
@@ -45,6 +49,11 @@ fn to_summary(b: &AccountBundle) -> AccountSummary {
         .as_deref()
         .map(|e| e.contains("20403") || e.to_lowercase().contains("device not match"))
         .unwrap_or(false);
+    // 多开实例状态：目录存在 + 该账号专属通道心跳新鲜（同 exe 名无法从进程列表区分实例）
+    let inst_dir = switch::isolated_dir(&b.id);
+    let instance_exists = inst_dir.is_dir();
+    let instance_alive = instance_exists
+        && crate::core::shim::isolated_alive(b.ide, &inst_dir, &switch::isolated_channel(&b.id));
     AccountSummary {
         id: b.id.clone(),
         name: b.name.clone(),
@@ -60,6 +69,8 @@ fn to_summary(b: &AccountBundle) -> AccountSummary {
         cred_expired,
         refresh_error: b.refresh_error.clone(),
         device_mismatch,
+        instance_exists,
+        instance_alive,
     }
 }
 

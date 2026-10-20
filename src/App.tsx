@@ -96,6 +96,8 @@ function toUiAccount(s: AccountSummary): Account {
     credExpired: s.cred_expired ?? false,
     refreshError: s.refresh_error ?? null,
     deviceMismatch: s.device_mismatch ?? false,
+    instanceExists: s.instance_exists ?? false,
+    instanceAlive: s.instance_alive ?? false,
   };
 }
 
@@ -114,6 +116,8 @@ function mergeSummary(a: Account, s: AccountSummary): Account {
     credExpired: s.cred_expired ?? false,
     refreshError: s.refresh_error ?? null,
     deviceMismatch: s.device_mismatch ?? false,
+    instanceExists: s.instance_exists ?? false,
+    instanceAlive: s.instance_alive ?? false,
   };
 }
 
@@ -582,6 +586,10 @@ export default function App() {
     try {
       const r = await launchIsolatedInstance(id);
       pushToast("success", `${r.name} 已启动独立实例`, `数据目录：${r.dir}`);
+      // 实例启动到切换助手写出首个心跳需数秒：分两次刷新摘要，让"独立实例运行中"标记出现
+      for (const delay of [8000, 20000]) {
+        setTimeout(() => void syncSummaries(), delay);
+      }
     } catch (e) {
       pushToast("error", `多开 ${acc?.name ?? ""} 失败，请先关闭 Trae 再重试`, errText(e));
     }
@@ -797,6 +805,7 @@ export default function App() {
         {page === "settings" && (
           <SettingsPage
             targetIde={targetIde}
+            accounts={accounts}
             onToast={pushToast}
             onSettings={setSettings}
             onReload={() => void reloadAccounts()}

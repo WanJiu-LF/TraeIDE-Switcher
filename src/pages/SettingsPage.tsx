@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Ide } from "../types";
+import type { Account, Ide } from "../types";
 import type { AppSettings } from "../bridge";
 import {
   autostart,
@@ -27,6 +27,8 @@ import { IconDownload } from "../icons";
 
 interface SettingsPageProps {
   targetIde: Ide;
+  /** 账号池：用于按账号数估算每轮轮询的请求量 */
+  accounts: Account[];
   onToast: (kind: "success" | "error" | "info", title: string, desc?: string) => void;
   onSettings: (s: AppSettings) => void;
   /** 账号库被整体替换（导入/恢复）后触发，用于刷新账号池 */
@@ -86,7 +88,7 @@ function Row({ title, desc, children }: { title: string; desc: string; children:
   );
 }
 
-export function SettingsPage({ targetIde, onToast, onSettings, onReload }: SettingsPageProps) {
+export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReload }: SettingsPageProps) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [injected, setInjected] = useState<boolean | null>(null);
   const [shim, setShim] = useState<ShimStatus | null>(null);
@@ -280,6 +282,16 @@ export function SettingsPage({ targetIde, onToast, onSettings, onReload }: Setti
     }
   };
 
+  // 每轮轮询的请求量估算：额度（CN 账号含签到 = 2，国际版 = 1）+ 资产（CN 5 个接口，国际版 4 个）
+  const cnN = accounts.filter((a) => a.ide === "trae-cn").length;
+  const intlN = accounts.length - cnN;
+  const perRound = cnN * 7 + intlN * 5;
+  const perMin = Math.round(perRound / Math.max(1, settings.refresh_interval));
+  const intervalDesc =
+    accounts.length === 0
+      ? "自动刷新全部账号额度、凭据状态与增值数据的间隔；同时用于自动换号判定"
+      : `自动刷新全部账号额度、凭据状态与增值数据的间隔；同时用于自动换号判定。当前 ${accounts.length} 个账号（CN ${cnN} · 国际版 ${intlN}），每轮约 ${perRound} 个请求、约 ${perMin} 个/分钟`;
+
   return (
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
       <div className="flex items-center mb-[18px]">
@@ -323,7 +335,7 @@ export function SettingsPage({ targetIde, onToast, onSettings, onReload }: Setti
             onChange={(v) => apply({ threshold: v })}
           />
         </Row>
-        <Row title="额度刷新间隔" desc="自动刷新全部账号额度、凭据状态与增值数据的间隔；同时用于自动换号判定">
+        <Row title="额度刷新间隔" desc={intervalDesc}>
           <Seg
             options={[
               { value: 1, label: "1 分钟" },

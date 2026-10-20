@@ -85,16 +85,32 @@ fn account_remain(b: &AccountBundle) -> Option<f64> {
     Some(super::quota::remain_of(&packs))
 }
 
-/// 判定额度耗尽：国际版按剩余百分比 <= 阈值；CN 积分制按总量归零
+/// 判定额度耗尽：两版本统一按「剩余百分比 <= 阈值」。
 /// （threshold 为该账号生效阈值：账号独立阈值优先，否则全局阈值）
+/// CN 此前直接判「剩余合计归零」，导致设置页与卡片上的阈值对 CN 账号完全不生效
+/// （只有积分耗尽那一刻才切，没有提前量）；同时"全部为无限额度包"会因有限包求和为 0
+/// 被误判为耗尽 → 无限额度账号被换走。
 fn is_exhausted(packs: &[PackQuota], ide: IdeKind, threshold: f64) -> bool {
+    // 接口返回形态异常导致没有可用包时无法判定：不做切换判定，避免误切
+    if packs.is_empty() {
+        return false;
+    }
     if ide == IdeKind::TraeCn {
-        let total: f64 = packs
-            .iter()
-            .filter(|p| !p.credits_unlimited)
-            .map(|p| (p.credits_limit - p.credits_used).max(0.0))
-            .sum();
-        return total <= 0.0;
+        // 任一包为无限额度（credits_limit == -1）→ 账号额度无限，永不耗尽
+        if packs.iter().any(|p| p.credits_unlimited) {
+            return false;
+        }
+        let (limit_sum, remain_sum) = packs.iter().fold((0.0_f64, 0.0_f64), |(l, r), p| {
+            (
+                l + p.credits_limit.max(0.0),
+                r + (p.credits_limit - p.credits_used).max(0.0),
+            )
+        });
+        // 总量为 0：账号没有任何可用积分（非"无法判定"），视为耗尽
+        if limit_sum <= 0.0 {
+            return true;
+        }
+        return remain_sum / limit_sum * 100.0 <= threshold;
     }
     let mut any = false;
     for p in packs {

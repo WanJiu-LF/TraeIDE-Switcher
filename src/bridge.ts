@@ -24,6 +24,10 @@ export interface AccountSummary {
   refresh_error?: string | null;
   /** 上次续期失败为设备不匹配 */
   device_mismatch?: boolean;
+  /** 该账号是否已创建过独立实例数据目录（多开过） */
+  instance_exists?: boolean;
+  /** 该账号的独立实例当前是否在运行（通道心跳新鲜） */
+  instance_alive?: boolean;
 }
 
 export interface PackQuota {
