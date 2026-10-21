@@ -7,6 +7,7 @@ import { IconClose, IconSearch } from "../icons";
 
 export type AccountDraft =
   | { kind: "paste"; ide: Ide; name: string; note: string; authBlob: string }
+  | { kind: "batch"; ide: Ide; note: string; blobs: string[] }
   | { kind: "scan"; items: { ide: Ide; name: string }[] }
   | { kind: "login"; ide: Ide; name: string; note: string; authBlob: string }
   | { kind: "edit"; name: string; note: string; threshold: number | null };
@@ -41,6 +42,23 @@ function normalizeCred(raw: string): string {
   if (/^\S+@\S+\s+[A-Za-z0-9+/=]{100,}$/.test(s)) s = s.split(/\s+/).pop() || s;
   s = s.replace(/^iCubeAuthInfo:\/\//i, "").trim();
   return s.replace(/^["']|["']$/g, "").trim();
+}
+
+/**
+ * 解析一次粘贴的全部凭据：单行单账号，或多行（每行一个密文 / 「邮箱+Tab+密文」）。
+ * 只保留像密文的行，空行/纯邮箱行忽略；按密文去重。
+ */
+function parseCredBlobs(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const blob = normalizeCred(line);
+    if (blob.length < 100 || !/^[A-Za-z0-9+/=]+$/.test(blob)) continue;
+    if (seen.has(blob)) continue;
+    seen.add(blob);
+    out.push(blob);
+  }
+  return out;
 }
 
 export function AddAccountDialog({
@@ -134,23 +152,29 @@ export function AddAccountDialog({
   if (!visible) return null;
 
   const editingEmail = editing?.email ?? "";
+  const credCount = cred.trim() ? parseCredBlobs(cred).length : 0;
 
   const submitPaste = async () => {
     if (pasting) return;
-    const authBlob = normalizeCred(cred);
-    if (!authBlob) {
-      onToast("error", "请先粘贴 Token", "支持 iCubeAuthInfo 密文串，或「邮箱 + Tab + 密文」整行");
+    const blobs = parseCredBlobs(cred);
+    if (blobs.length === 0) {
+      onToast("error", "没有识别到有效 Token", "支持 iCubeAuthInfo 密文串，或「邮箱 + Tab + 密文」，可多行批量粘贴");
       return;
     }
     setPasting(true);
-    let ide = targetIde;
-    try {
-      ide = await detectAccountIde(authBlob);
-    } catch {
-      // 解密失败时按当前版本提交，后端会返回具体原因并由外层 toast 展示
+    if (blobs.length === 1) {
+      let ide = targetIde;
+      try {
+        ide = await detectAccountIde(blobs[0]);
+      } catch {
+        // 解密失败时按当前版本提交，后端会返回具体原因并由外层 toast 展示
+      }
+      setPasting(false);
+      onSave({ kind: "paste", ide, name: name.trim(), note, authBlob: blobs[0] });
+      return;
     }
     setPasting(false);
-    onSave({ kind: "paste", ide, name: name.trim(), note, authBlob });
+    onSave({ kind: "batch", ide: targetIde, note, blobs });
   };
 
   const startScan = async () => {
@@ -350,6 +374,7 @@ export function AddAccountDialog({
                       复制同一个键的值
                     </div>
                     <div>· 也可直接粘贴本工具导出的整行「邮箱 + Tab + 密文」，邮箱前缀会自动剥离</div>
+                    <div>· 支持多行批量粘贴：每行一个密文（或整行邮箱 + Tab + 密文），一次性导入多个账号</div>
                     <div>
                       · 版本按密文内的 host / userTag / userRegion 自动判定；解密失败时使用当前选中版本（
                       {targetIde === "trae-cn" ? "Trae CN" : "Trae"}）
@@ -361,10 +386,10 @@ export function AddAccountDialog({
                     </button>
                     <button
                       className="btn-primary disabled:opacity-50"
-                      disabled={!cred.trim() || pasting}
+                      disabled={credCount === 0 || pasting}
                       onClick={submitPaste}
                     >
-                      {pasting ? "识别中…" : "识别并添加"}
+                      {pasting ? "识别中…" : credCount > 1 ? `识别并添加 ${credCount} 个` : "识别并添加"}
                     </button>
                   </div>
                 </div>

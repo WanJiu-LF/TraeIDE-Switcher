@@ -756,6 +756,30 @@ export default function App() {
       return;
     }
 
+    if (draft.kind === "batch") {
+      let added = 0;
+      let replaced = 0;
+      let failed = 0;
+      const errs: string[] = [];
+      for (const blob of draft.blobs) {
+        try {
+          const s = await addAccount(draft.ide, "", draft.note, blob);
+          upsertSummary(s);
+          if (s.replaced) replaced++;
+          else added++;
+        } catch (e) {
+          failed++;
+          if (errs.length < 3) errs.push(errText(e));
+        }
+      }
+      const detail = failed ? errs.join("；") : undefined;
+      const title = failed
+        ? `批量导入完成：成功 ${added + replaced} 个，失败 ${failed} 个`
+        : `批量导入完成：新增 ${added} 个${replaced ? `，更新 ${replaced} 个` : ""}`;
+      pushToast(failed && !(added + replaced) ? "error" : failed ? "info" : "success", title, detail);
+      return;
+    }
+
     if (draft.kind === "paste" || draft.kind === "login") {
       try {
         const s = await addAccount(draft.ide, draft.name, draft.note, draft.authBlob);
