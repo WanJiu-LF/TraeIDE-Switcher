@@ -40,6 +40,7 @@ import {
   type ShimStatus,
 } from "./bridge";
 import { TitleBar } from "./components/TitleBar";
+import { planFromProductType } from "./components/AccountCard";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { Toasts } from "./components/Toasts";
@@ -179,13 +180,31 @@ export default function App() {
   const applyQuota = (id: string, packs: PackQuota[]) => {
     const p = packs[0];
     if (!p) return;
+    // 套餐取最高优先级包（CN 客户端 CN_PRODUCT_TYPE_PRIORITY 同口径，不能只看首个包：
+    // 免费包常排在列表最前，会让 Pro/Ultra/CNExpress 账号被标成免费版）
+    const planOrder = [100, 6, 4, 1, 8, 7, 9, 2, 3, 5, 0];
+    const planType = planOrder.find((t) => packs.some((q) => q.product_type === t)) ?? p.product_type;
     setAccounts((list) =>
       list.map((a) => {
         if (a.id !== id) return a;
         const next: Account = {
           ...a,
-          plan: p.product_type === 1 ? "pro" : "free",
+          plan: planFromProductType(planType),
         };
+        // 快速请求额度：多包求和，任一包 -1 视为无限（CN 客户端 H0r 同口径）
+        const fastUnlimited = packs.some((q) => q.fast_unlimited || q.fast_limit === -1);
+        const fastLimit = packs.reduce((sum, q) => sum + (q.fast_unlimited ? 0 : Math.max(q.fast_limit, 0)), 0);
+        const fastUsed = packs.reduce((sum, q) => sum + Math.max(q.fast_used, 0), 0);
+        if (fastUnlimited || fastLimit > 0 || fastUsed > 0) {
+          next.fast = {
+            used: fastUsed,
+            limit: fastUnlimited ? -1 : fastLimit,
+            remaining: fastUnlimited ? -1 : Math.max(fastLimit - fastUsed, 0),
+            unlimited: fastUnlimited,
+          };
+        } else {
+          next.fast = undefined;
+        }
         if (a.ide === "trae-cn") {
           const sources = packs.map((q) => ({
             desc: q.desc || "积分",

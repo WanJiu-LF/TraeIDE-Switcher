@@ -240,6 +240,11 @@ pub struct PackQuota {
     pub no_bonus_quota: bool,
     /// is_dollar_usage_billing：额度以美元计（国际版新计费版本）
     pub is_dollar_billing: bool,
+    /// premium_model_fast_request_limit：快速请求额度（-1=无限）
+    pub fast_limit: f64,
+    /// premium_model_fast_amount / premium_model_fast_request_usage：快速请求已用
+    pub fast_used: f64,
+    pub fast_unlimited: bool,
     /// entitlement_base_info.end_time（结算周期结束时刻，秒）：额度重置时间基准
     pub end_time: f64,
     pub expire_time: String,
@@ -260,6 +265,11 @@ pub fn summarize_ent_usage(v: &Value) -> Vec<PackQuota> {
                     let quota = info.get("quota")?;
                     let usage = p.get("usage")?;
                     let credits_limit = num(quota, "credits_limit");
+                    let fast_limit = num(quota, "premium_model_fast_request_limit");
+                    let fast_used = usage
+                        .get("premium_model_fast_amount")
+                        .and_then(|x| x.as_f64())
+                        .unwrap_or_else(|| num(usage, "premium_model_fast_request_usage"));
                     let source_type = info
                         .pointer("/product_extra/package_extra/package_source_type")
                         .and_then(|t| t.as_i64())
@@ -284,6 +294,9 @@ pub fn summarize_ent_usage(v: &Value) -> Vec<PackQuota> {
                             .and_then(|b| b.as_bool())
                             .unwrap_or(false),
                         is_dollar_billing: dollar_billing,
+                        fast_limit,
+                        fast_used,
+                        fast_unlimited: fast_limit == -1.0,
                         end_time: num(info, "end_time"),
                         expire_time: p
                             .get("expire_time")

@@ -1,5 +1,45 @@
 import { useEffect, useRef, useState } from "react";
-import type { Account } from "../types";
+import type { Account, Plan } from "../types";
+
+/** 套餐枚举 → 展示标签/样式。数值口径来自 CN 客户端 Ul 枚举：
+ *  Free=0 Pro=1 Package=2 PromoCode=3 ProPlus=4 ProPlusPack=5 Ultra=6 PayGo=7
+ *  Lite=8 SoloInvite=9 CNExpress=100 */
+export const PLAN_META: Record<Plan, { label: string; cls: string }> = {
+  free: { label: "免费版", cls: "bg-[#fbfdfe] border-line text-ink2" },
+  pro: { label: "Pro", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
+  "pro-plus": { label: "Pro+", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
+  ultra: { label: "Ultra", cls: "bg-[#f3edff] border-[#e0d2ff] text-[#6b4fd7]" },
+  lite: { label: "Lite", cls: "bg-[#eafaf7] border-[#cdeee6] text-accent" },
+  paygo: { label: "按量", cls: "bg-[#fbfdfe] border-line text-ink2" },
+  package: { label: "套餐", cls: "bg-[#fbfdfe] border-line text-ink2" },
+  "solo-invite": { label: "邀请", cls: "bg-[#fbfdfe] border-line text-ink2" },
+  "cn-express": { label: "极速", cls: "bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a]" },
+};
+
+export function planFromProductType(t: number): Plan {
+  switch (t) {
+    case 1:
+      return "pro";
+    case 2:
+    case 3:
+    case 5:
+      return "package";
+    case 4:
+      return "pro-plus";
+    case 6:
+      return "ultra";
+    case 7:
+      return "paygo";
+    case 8:
+      return "lite";
+    case 9:
+      return "solo-invite";
+    case 100:
+      return "cn-express";
+    default:
+      return "free";
+  }
+}
 
 interface AccountCardProps {
   account: Account;
@@ -397,11 +437,9 @@ export function AccountCard({
 
       <div className="flex gap-1.5 flex-wrap mb-1">
         <span
-          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${
-            account.plan === "pro" ? "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" : "bg-[#fbfdfe] border-line text-ink2"
-          }`}
+          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${(PLAN_META[account.plan] ?? PLAN_META.free).cls}`}
         >
-          {account.plan === "pro" ? "Pro" : "免费版"}
+          {(PLAN_META[account.plan] ?? PLAN_META.free).label}
         </span>
         <span
           className={`text-[10.5px] px-2 py-0.5 rounded-full border ${
@@ -472,6 +510,17 @@ export function AccountCard({
             <QuotaBar label="赠送额度" used={account.weekly.used} total={account.weekly.total} dollar={account.dollar} />
           )}
         </>
+      )}
+
+      {account.fast && (
+        <div className="flex items-center justify-between mt-2 text-[10.5px] text-ink3">
+          <span>快速请求</span>
+          <span className="text-ink2">
+            {account.fast.unlimited
+              ? "无限"
+              : `${account.fast.remaining.toLocaleString("zh-CN")} / ${account.fast.limit.toLocaleString("zh-CN")}`}
+          </span>
+        </div>
       )}
 
       <div className="mt-auto pt-2.5">

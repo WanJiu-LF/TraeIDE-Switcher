@@ -45,6 +45,10 @@ export interface PackQuota {
   no_bonus_quota: boolean;
   /** 国际版：额度以美元计 */
   is_dollar_billing: boolean;
+  /** 快速请求额度（-1=无限） */
+  fast_limit: number;
+  fast_used: number;
+  fast_unlimited: boolean;
   /** 结算周期结束时刻（秒），额度重置基准 */
   end_time: number;
   expire_time: string;

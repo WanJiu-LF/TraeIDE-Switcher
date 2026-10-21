@@ -2,7 +2,16 @@ export type Ide = "trae" | "trae-cn";
 
 export type AccountStatus = "normal" | "exhausted" | "error";
 
-export type Plan = "pro" | "free";
+export type Plan =
+  | "free"
+  | "pro"
+  | "pro-plus"
+  | "ultra"
+  | "lite"
+  | "paygo"
+  | "package"
+  | "solo-invite"
+  | "cn-express";
 
 export interface Quota {
   used: number;
@@ -50,6 +59,8 @@ export interface Account {
     total: number;
     sources: { desc: string; remaining: number; used: number; limit: number; unlimited: boolean; expire: string }[];
   };
+  /** 快速请求额度（premium_model_fast_request_*，与积分独立；unlimited 时 limit/remaining 为 -1） */
+  fast?: { used: number; limit: number; remaining: number; unlimited: boolean };
   checkin?: { checked: boolean; reward: number };
 }
 

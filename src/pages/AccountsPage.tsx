@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Account, AccountStatus, Ide, Plan } from "../types";
 import type { IdeStatus } from "../bridge";
-import { AccountCard } from "../components/AccountCard";
+import { AccountCard, PLAN_META } from "../components/AccountCard";
 import { Select } from "../components/Select";
 import { IconPlus, IconSearch } from "../icons";
 
@@ -251,8 +251,10 @@ export function AccountsPage(props: AccountsPageProps) {
           onChange={(v) => setPlanFilter(v as typeof planFilter)}
           options={[
             { value: "all", label: "套餐：全部" },
-            { value: "pro", label: "套餐：Pro" },
-            { value: "free", label: "套餐：免费版" },
+            ...(Object.keys(PLAN_META) as Plan[]).map((value) => ({
+              value,
+              label: `套餐：${PLAN_META[value].label}`,
+            })),
           ]}
         />
         <Select
