@@ -182,7 +182,7 @@ export default function App() {
     if (!p) return;
     // 套餐取最高优先级包（CN 客户端 CN_PRODUCT_TYPE_PRIORITY 同口径，不能只看首个包：
     // 免费包常排在列表最前，会让 Pro/Ultra/CNExpress 账号被标成免费版）
-    const planOrder = [100, 6, 4, 1, 8, 7, 9, 2, 3, 5, 0];
+    const planOrder = [100, 6, 4, 1, 8, 7, 9, 0, 2, 3, 5];
     const planType = planOrder.find((t) => packs.some((q) => q.product_type === t)) ?? p.product_type;
     setAccounts((list) =>
       list.map((a) => {

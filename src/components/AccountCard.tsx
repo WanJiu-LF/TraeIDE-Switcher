@@ -5,15 +5,15 @@ import type { Account, Plan } from "../types";
  *  Free=0 Pro=1 Package=2 PromoCode=3 ProPlus=4 ProPlusPack=5 Ultra=6 PayGo=7
  *  Lite=8 SoloInvite=9 CNExpress=100 */
 export const PLAN_META: Record<Plan, { label: string; cls: string }> = {
-  free: { label: "免费版", cls: "bg-[#fbfdfe] border-line text-ink2" },
-  pro: { label: "Pro", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
-  "pro-plus": { label: "Pro+", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
-  ultra: { label: "Ultra", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
-  lite: { label: "Lite", cls: "bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]" },
-  paygo: { label: "按量", cls: "bg-[#fbfdfe] border-line text-ink2" },
-  package: { label: "套餐", cls: "bg-[#fbfdfe] border-line text-ink2" },
-  "solo-invite": { label: "邀请", cls: "bg-[#fbfdfe] border-line text-ink2" },
-  "cn-express": { label: "极速", cls: "bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a]" },
+  free: { label: "免费版", cls: "chip chip-neutral" },
+  pro: { label: "Pro", cls: "chip chip-info" },
+  "pro-plus": { label: "Pro+", cls: "chip chip-info" },
+  ultra: { label: "Ultra", cls: "chip chip-info" },
+  lite: { label: "Lite", cls: "chip chip-ok" },
+  paygo: { label: "按量", cls: "chip chip-neutral" },
+  package: { label: "套餐", cls: "chip chip-neutral" },
+  "solo-invite": { label: "邀请", cls: "chip chip-neutral" },
+  "cn-express": { label: "极速", cls: "chip chip-warn" },
 };
 
 export function planFromProductType(t: number): Plan {
@@ -109,9 +109,9 @@ function QuotaBar({
 }
 
 const STATUS_BADGE: Record<Account["status"], { text: string; cls: string }> = {
-  normal: { text: "正常", cls: "bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]" },
-  exhausted: { text: "额度耗尽", cls: "bg-[#fdeeee] border-[#f6cfcf] text-[#d24545]" },
-  error: { text: "登录异常", cls: "bg-[#fdeeee] border-[#f6cfcf] text-[#d24545]" },
+  normal: { text: "正常", cls: "chip chip-ok" },
+  exhausted: { text: "额度耗尽", cls: "chip chip-bad" },
+  error: { text: "登录异常", cls: "chip chip-bad" },
 };
 
 /** 到期时间归一（epoch 秒/毫秒与 ISO 串都能显示成 YYYY/MM/DD） */
@@ -190,7 +190,7 @@ function CreditsBlock({ account, claiming, onClaimCheckin }: { account: Account;
           (account.checkin.checked ? (
             <span
               title="今日已签到"
-              className="text-[10px] px-2 py-0.5 rounded-full border bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]"
+              className="chip chip-ok"
             >
               今日已签到
             </span>
@@ -199,7 +199,7 @@ function CreditsBlock({ account, claiming, onClaimCheckin }: { account: Account;
               title={`今日签到可得 ${account.checkin.reward} 积分`}
               disabled={claiming}
               onClick={() => onClaimCheckin(account.id)}
-              className="text-[10px] px-2 py-0.5 rounded-full border bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a] cursor-pointer hover:bg-[#ffe9d2] disabled:opacity-60"
+              className="chip chip-warn cursor-pointer hover:bg-[#ffe9d2] disabled:opacity-60"
             >
               {claiming ? "签到中…" : "一键签到"}
             </button>
@@ -213,7 +213,7 @@ function CreditsBlock({ account, claiming, onClaimCheckin }: { account: Account;
           {credits.total.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </b>
         {hasUnlimited && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]">
+          <span className="chip chip-info">
             含无限额度
           </span>
         )}
@@ -232,13 +232,13 @@ function CreditsBlock({ account, claiming, onClaimCheckin }: { account: Account;
             <div className="flex items-center justify-between text-[11px] text-ink2 mb-[5px]">
               <span className="truncate">
                 {g.desc}
-                {g.count > 1 && <span className="text-[9.5px] text-ink3 ml-1">共 {g.count} 项</span>}
+                {g.count > 1 && <span className="text-[10.5px] text-ink3 ml-1">共 {g.count} 项</span>}
               </span>
               <span className="flex items-center gap-1.5 flex-none ml-2">
                 <b className={`font-mono ${!g.unlimited && remainPct <= 0 ? "text-bad" : "text-ink"}`}>
                   {g.unlimited ? "无限" : `${g.remaining.toLocaleString("zh-CN")} / ${g.limit.toLocaleString("zh-CN")}`}
                 </b>
-                {g.expire && <span className="text-[9.5px] text-ink3">{expireText(g.expire)}</span>}
+                {g.expire && <span className="text-[10.5px] text-ink3">{expireText(g.expire)}</span>}
               </span>
             </div>
             <div className="h-[4px] bg-[#eef3f6] rounded-full overflow-hidden">
@@ -381,7 +381,7 @@ export function AccountCard({
       }`}
     >
       {current && (
-        <div className="absolute -top-[9px] right-3 bg-accent text-white text-[10px] px-2.5 py-0.5 rounded-full font-semibold">
+        <div className="absolute -top-[9px] right-3 bg-accent text-white text-[10.5px] px-2.5 py-0.5 rounded-full font-semibold">
           使用中
         </div>
       )}
@@ -399,13 +399,13 @@ export function AccountCard({
           </button>
         )}
         <div
-          className="w-[38px] h-[38px] rounded-[11px] flex-none flex items-center justify-center text-[15px] font-bold text-white transition-transform duration-200 ease-out group-hover:scale-105"
+          className="w-[38px] h-[38px] rounded-[10px] flex-none flex items-center justify-center text-[15px] font-bold text-white transition-transform duration-200 ease-out group-hover:scale-105"
           style={{ background: account.color }}
         >
           {account.initial}
         </div>
         <div className="min-w-0">
-          <div className="text-[13.5px] font-semibold truncate">{account.name}</div>
+          <div className="text-[13px] font-semibold truncate">{account.name}</div>
           <div className="text-[11px] text-ink3 truncate">{account.email}</div>
         </div>
         <div className="relative ml-auto">
@@ -427,7 +427,7 @@ export function AccountCard({
                 {menuItems.map((m, i) => (
                   <button
                     key={m.label}
-                    className={`menu-item-in w-full text-left px-3.5 py-[7px] text-[12px] transition-colors duration-150 ${
+                    className={`menu-item-in w-full text-left px-3.5 py-[7px] text-[12.5px] transition-colors duration-150 ${
                       m.disabled
                         ? "text-ink3 cursor-not-allowed"
                         : `cursor-pointer hover:bg-[#f0f6f7] ${m.danger ? "text-bad" : "text-ink2"}`
@@ -450,26 +450,22 @@ export function AccountCard({
 
       <div className="flex gap-1.5 flex-wrap mb-1">
         <span
-          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${(PLAN_META[account.plan] ?? PLAN_META.free).cls}`}
+          className={(PLAN_META[account.plan] ?? PLAN_META.free).cls}
         >
           {(PLAN_META[account.plan] ?? PLAN_META.free).label}
         </span>
-        <span
-          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${
-            account.ide === "trae-cn" ? "bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a]" : "bg-[#fbfdfe] border-line text-ink2"
-          }`}
-        >
+        <span className={account.ide === "trae-cn" ? "chip chip-warn" : "chip chip-neutral"}>
           {account.ide === "trae-cn" ? "Trae CN" : "Trae"}
         </span>
         <span
-          className={`text-[10.5px] px-2 py-0.5 rounded-full border ${STATUS_BADGE[account.status].cls}`}
+          className={STATUS_BADGE[account.status].cls}
           title={account.errorText}
         >
           {STATUS_BADGE[account.status].text}
         </span>
         {account.threshold != null && (
           <span
-            className="text-[10.5px] px-2 py-0.5 rounded-full border bg-[#fbfdfe] border-line text-ink2"
+            className="chip chip-neutral"
             title="该账号独立设置：剩余额度低于此百分比时自动换号"
           >
             低于 {account.threshold}% 自动换号
@@ -477,7 +473,7 @@ export function AccountCard({
         )}
         {account.instanceAlive && (
           <span
-            className="text-[10.5px] px-2 py-0.5 rounded-full border border-accent-line text-accent bg-accent-soft"
+            className="chip chip-accent"
             title="该账号的独立实例正在运行，可在实例内无感换号（不影响主实例）"
           >
             独立实例运行中
@@ -554,7 +550,7 @@ export function AccountCard({
 
         {!current && (
           <button
-            className="mt-3 w-full h-8 rounded-[9px] border border-line bg-white text-[11.5px] text-ink2 cursor-pointer transition-all duration-150 hover:border-accent hover:text-accent hover:shadow-card active:scale-[0.98] disabled:opacity-60 disabled:cursor-default disabled:hover:border-line disabled:hover:text-ink2 disabled:hover:shadow-none"
+            className="btn-ghost w-full mt-3"
             disabled={switching}
             onClick={() => onSwitch(account.id)}
           >

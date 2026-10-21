@@ -31,7 +31,7 @@ export function AboutPage({ appVersion, onCheckUpdate }: AboutPageProps) {
         <h3 className="text-[17px] font-bold">关于</h3>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card p-6 mb-4">
+      <div className="panel p-6 mb-4">
         <div className="flex items-center gap-4">
           <IconLogo className="w-[56px] h-[56px] flex-none" />
           <div>
@@ -41,7 +41,7 @@ export function AboutPage({ appVersion, onCheckUpdate }: AboutPageProps) {
           <div className="ml-auto flex items-center gap-2.5">
             <div className="text-right">
               <div className="text-[11px] text-ink3">当前版本</div>
-              <div className="font-mono text-[13.5px] font-semibold">{appVersion ? `v${appVersion}` : "—"}</div>
+              <div className="font-mono text-[13px] font-semibold">{appVersion ? `v${appVersion}` : "—"}</div>
             </div>
             <button className="btn-primary disabled:opacity-50" disabled={checking} onClick={() => void run()}>
               {checking ? "检查中…" : "检查更新"}
@@ -69,7 +69,7 @@ export function AboutPage({ appVersion, onCheckUpdate }: AboutPageProps) {
         </div>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card">
+      <div className="panel">
         <div className="px-[22px] py-3.5 border-b border-line-soft">
           <div className="text-[13px] font-semibold">开源鸣谢</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">本项目基于以下开源项目构建，感谢其作者与贡献者</div>

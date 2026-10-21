@@ -39,20 +39,20 @@ export function ConfirmDialog({ open, title, description, confirmText = "删除"
       onClick={onCancel}
     >
       <div
-        className={`${closing ? "dialog-out" : "dialog-in"} bg-card rounded-[16px] shadow-soft border border-line w-[380px] p-6`}
+        className={`${closing ? "dialog-out" : "dialog-in"} bg-card rounded-[12px] shadow-soft border border-line w-[380px] p-6`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="text-[15px] font-bold">{title}</div>
         <div className="text-[12.5px] text-ink2 mt-2.5 leading-relaxed">{description}</div>
         <div className="flex justify-end gap-2.5 mt-6">
           <button
-            className="h-9 px-4 rounded-[10px] border border-line bg-white text-[12.5px] text-ink2 cursor-pointer transition-all duration-150 hover:bg-[#f4f8fa] active:scale-[0.97]"
+            className="btn-ghost"
             onClick={onCancel}
           >
             取消
           </button>
           <button
-            className="h-9 px-4 rounded-[10px] bg-bad text-white text-[12.5px] font-semibold cursor-pointer transition-all duration-150 hover:opacity-90 active:scale-[0.97]"
+            className="btn-danger"
             onClick={onConfirm}
           >
             {confirmText}

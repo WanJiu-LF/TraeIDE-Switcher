@@ -57,7 +57,7 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
             <item.icon />
             {!collapsed && <span className="fade-in whitespace-nowrap">{item.label}</span>}
             {!collapsed && item.key === "logs" && logUnread > 0 && (
-              <span key={logUnread} className="num-pop ml-auto bg-bad text-white text-[10px] rounded-full px-1.5">
+              <span key={logUnread} className="num-pop ml-auto bg-bad text-white text-[10.5px] rounded-full px-1.5">
                 {logUnread}
               </span>
             )}
@@ -81,14 +81,14 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
           <button
             title={`目标版本：${targetIde === "trae" ? "Trae" : "Trae CN"}（点击切换）`}
             onClick={() => onTargetIde(targetIde === "trae" ? "trae-cn" : "trae")}
-            className="w-full py-2 rounded-[10px] bg-accent-soft text-accent text-[11px] font-bold cursor-pointer transition-colors duration-150 hover:bg-accent-line"
+            className="w-full py-2 rounded-[10px] bg-accent-soft text-accent text-[11.5px] font-bold cursor-pointer transition-colors duration-150 hover:bg-accent-line"
           >
             {targetIde === "trae" ? "TR" : "CN"}
           </button>
         ) : (
           <div className="mx-1.5 p-2.5 rounded-[12px] bg-white border border-line">
             <div className="text-[11px] text-ink3 mb-1.5">目标版本</div>
-            <div className="flex bg-[#f1f6f8] rounded-[10px] p-[3px] gap-0.5">
+            <div className="seg flex w-full">
               {(
                 [
                   { key: "trae", label: "Trae" },
@@ -98,9 +98,7 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
                 <button
                   key={o.key}
                   onClick={() => onTargetIde(o.key)}
-                  className={`flex-1 py-[5px] rounded-[8px] text-[11.5px] cursor-pointer transition-colors duration-150 ${
-                    targetIde === o.key ? "bg-white text-accent font-semibold shadow-card" : "text-ink2 hover:text-ink"
-                  }`}
+                  className={`seg-tab flex-1 px-2 ${targetIde === o.key ? "seg-tab-active" : ""}`}
                 >
                   {o.label}
                 </button>

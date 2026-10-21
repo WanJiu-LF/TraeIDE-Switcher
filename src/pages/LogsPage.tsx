@@ -10,9 +10,9 @@ interface LogsPageProps {
 }
 
 const LEVEL_META: Record<LogEntry["level"], { text: string; cls: string }> = {
-  Info: { text: "信息", cls: "bg-[#eef4f8] text-[#4a7493]" },
-  Warn: { text: "警告", cls: "bg-[#fff4e5] text-[#c2731a]" },
-  Err: { text: "错误", cls: "bg-[#fdeeee] text-[#d24545]" },
+  Info: { text: "信息", cls: "chip chip-neutral" },
+  Warn: { text: "警告", cls: "chip chip-warn" },
+  Err: { text: "错误", cls: "chip chip-bad" },
 };
 
 const SOURCE_TEXT: Record<LogEntry["source"], string> = {
@@ -92,7 +92,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
       <div className="flex items-center mb-[18px]">
         <h3 className="text-[17px] font-bold">运行记录</h3>
-        <div className="flex bg-[#f1f6f8] rounded-[9px] p-[3px] gap-0.5 ml-3">
+        <div className="seg ml-3">
           {(
             [
               { key: "logs", label: `运行日志` },
@@ -102,9 +102,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
             <button
               key={t.key}
               onClick={() => setView(t.key)}
-              className={`px-3 py-1 rounded-[7px] text-[11.5px] cursor-pointer ${
-                view === t.key ? "bg-white text-accent font-semibold" : "text-ink2"
-              }`}
+              className={`seg-tab ${view === t.key ? "seg-tab-active" : ""}`}
             >
               {t.label}
             </button>
@@ -120,7 +118,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
       {view === "logs" ? (
         <>
           <div className="flex items-center gap-2.5 mb-4">
-            <div className="flex-none w-[240px] h-[34px] bg-white border border-line rounded-[10px] flex items-center gap-2 px-3">
+            <div className="flex-none w-[240px] input">
               <IconSearch className="w-3.5 h-3.5 text-ink3" />
               <input
                 className="flex-1 min-w-0 outline-none bg-transparent text-ink text-[12.5px]"
@@ -149,7 +147,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
                 ...sources.map((s) => ({ value: s, label: `来源：${SOURCE_TEXT[s]}` })),
               ]}
             />
-            <span className="h-[34px] flex items-center px-3 rounded-[10px] border border-line bg-[#fbfdfe] text-[12.5px] text-ink3">
+            <span className="input w-auto flex-none font-sans text-ink3">
               时间：今天
             </span>
             <button className="btn-ghost ml-auto" onClick={handleExport}>
@@ -157,13 +155,13 @@ export function LogsPage({ onToast }: LogsPageProps) {
             </button>
           </div>
 
-          <div className="bg-card border border-line rounded-[12px] shadow-card overflow-hidden">
+          <div className="panel overflow-hidden">
             {visible.length === 0 ? (
               <div className="h-[200px] flex items-center justify-center text-[12.5px] text-ink3">无匹配记录，可清空搜索条件或将级别、来源筛选改为“全部”</div>
             ) : (
               visible.map((l) => (
                 <div key={l.id} className="flex items-center gap-3 px-[18px] py-[11px] border-b border-line-soft last:border-b-0">
-                  <div className={`w-[52px] flex-none text-center text-[10.5px] py-0.5 rounded-md font-semibold ${LEVEL_META[l.level].cls}`}>
+                  <div className={`${LEVEL_META[l.level].cls} w-[52px] flex-none justify-center`}>
                     {LEVEL_META[l.level].text}
                   </div>
                   <div className="font-mono text-[11.5px] text-ink3 flex-none">{fmtTime(l.ts_ms)}</div>
@@ -175,7 +173,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
           </div>
         </>
       ) : (
-        <div className="bg-card border border-line rounded-[12px] shadow-card overflow-hidden">
+        <div className="panel overflow-hidden">
           {history.length === 0 ? (
             <div className="h-[200px] flex items-center justify-center text-[12.5px] text-ink3">
               暂无换号记录。每次手动或自动换号成功后，此处将保留一条记录
@@ -184,9 +182,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
             history.map((r, i) => (
               <div key={`${r.ts}-${i}`} className="flex items-center gap-3 px-[18px] py-[11px] border-b border-line-soft last:border-b-0">
                 <div
-                  className={`w-[52px] flex-none text-center text-[10.5px] py-0.5 rounded-md font-semibold ${
-                    r.ok ? "bg-[#e9f9ef] text-[#1d9d54]" : "bg-[#fdeeee] text-[#d24545]"
-                  }`}
+                  className={`chip ${r.ok ? "chip-ok" : "chip-bad"} w-[52px] flex-none justify-center`}
                 >
                   {r.ok ? "成功" : "失败"}
                 </div>
@@ -200,7 +196,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
                   <span className="text-[12px] font-semibold text-ink truncate max-w-[160px]" title={r.to}>
                     {r.to}
                   </span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-line text-ink3 flex-none">
+                  <span className="chip chip-neutral flex-none">
                     {r.ide}
                   </span>
                   {r.ms > 0 && <span className="text-[10.5px] text-ink3 flex-none">{r.ms} ms</span>}

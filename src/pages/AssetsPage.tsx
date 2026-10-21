@@ -327,13 +327,13 @@ function CreditBars({ sources, dollar }: { sources: CreditSource[]; dollar?: boo
               <div className="flex items-center justify-between text-[11.5px] text-ink2 mb-[5px]">
                 <span className="truncate">
                   {g.desc}
-                  {g.count > 1 && <span className="text-[9.5px] text-ink3 ml-1">共 {g.count} 笔</span>}
+                  {g.count > 1 && <span className="text-[10.5px] text-ink3 ml-1">共 {g.count} 笔</span>}
                 </span>
                 <span className="flex items-center gap-2 flex-none ml-2">
                   <b className={`font-mono ${!g.unlimited && remainPct <= 0 ? "text-bad" : "text-ink"}`}>
                     {g.unlimited ? "无限" : `${money(g.remaining)} / ${money(g.limit)}`}
                   </b>
-                  {g.expire && <span className="text-[9.5px] text-ink3">{day(g.expire)} 到期</span>}
+                  {g.expire && <span className="text-[10.5px] text-ink3">{day(g.expire)} 到期</span>}
                 </span>
               </div>
               <div className="h-[5px] bg-[#eef3f6] rounded-full overflow-hidden">
@@ -368,9 +368,9 @@ function Section({
 }) {
   const [showRaw, setShowRaw] = useState(false);
   return (
-    <div className="bg-card border border-line rounded-[12px] shadow-card p-4">
+    <div className="panel p-4">
       <div className="flex items-center gap-2">
-        <span className="text-[13.5px] font-semibold">{title}</span>
+        <span className="text-[13px] font-semibold">{title}</span>
         {badge && <span className="text-[10.5px] text-ink3">{badge}</span>}
         {action}
         {raw !== undefined && (
@@ -385,7 +385,7 @@ function Section({
       </div>
       <div className="mt-2.5">{children}</div>
       {showRaw && raw !== undefined && (
-        <pre className="dropdown-in mt-2.5 bg-[#f7fafb] border border-line-soft rounded-[9px] p-3 text-[10.5px] font-mono text-ink2 overflow-x-auto max-h-[280px]">
+        <pre className="dropdown-in mt-2.5 bg-[#f7fafb] border border-line-soft rounded-[8px] p-3 text-[10.5px] font-mono text-ink2 overflow-x-auto max-h-[280px]">
           {dump(raw)}
         </pre>
       )}
@@ -424,7 +424,7 @@ function Spark({ data }: { data: UsageSample[] }) {
           vectorEffect="non-scaling-stroke"
         />
       </svg>
-      <div className="flex items-center justify-between text-[10px] text-ink3 mt-1">
+      <div className="flex items-center justify-between text-[10.5px] text-ink3 mt-1">
         <span>{stamp(minX)}</span>
         <span>
           最高 {fmt(maxY)} ｜ 最低 {fmt(minY)}
@@ -477,7 +477,7 @@ function ItemList({ items, limit = 8 }: { items: unknown[]; limit?: number }) {
   return (
     <div className="mt-2 flex flex-col gap-1.5">
       {objs.slice(0, limit).map((o, i) => (
-        <div key={i} className="bg-[#fbfdfe] border border-line-soft rounded-[9px] px-3 py-2">
+        <div key={i} className="bg-[#fbfdfe] border border-line-soft rounded-[8px] px-3 py-2">
           <KeyVals data={o} max={8} />
         </div>
       ))}
@@ -489,7 +489,7 @@ function ItemList({ items, limit = 8 }: { items: unknown[]; limit?: number }) {
 function HostTable({ title, hosts }: { title: string; hosts?: Record<string, string> }) {
   if (!hosts || Object.keys(hosts).length === 0) return null;
   return (
-    <div className="bg-[#fbfdfe] border border-line-soft rounded-[9px] px-3 py-2">
+    <div className="bg-[#fbfdfe] border border-line-soft rounded-[8px] px-3 py-2">
       <div className="text-[10.5px] text-ink3 mb-1">{title}</div>
       {Object.entries(hosts).map(([k, v]) => (
         <div key={k} className="flex justify-between text-[11px] border-b border-line-soft py-[3px] last:border-b-0">
@@ -506,23 +506,23 @@ function HostTable({ title, hosts }: { title: string; hosts?: Record<string, str
 function Chip({ text, tone = "dim" }: { text: string; tone?: "ok" | "accent" | "dim" | "bad" }) {
   const cls =
     tone === "ok"
-      ? "bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]"
+      ? "chip chip-ok"
       : tone === "accent"
-        ? "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]"
+        ? "chip chip-info"
         : tone === "bad"
-          ? "bg-[#fdeeee] border-[#f6cfcf] text-[#d24545]"
-          : "bg-[#fbfdfe] border-line text-ink2";
-  return <span className={`text-[10px] px-1.5 py-0.5 rounded-full border flex-none ${cls}`}>{text}</span>;
+          ? "chip chip-bad"
+          : "chip chip-neutral";
+  return <span className={`flex-none ${cls}`}>{text}</span>;
 }
 
 function DeviceCell({ label, value, hint }: { label: string; value?: string; hint: string }) {
   return (
-    <div className="bg-[#fbfdfe] border border-line-soft rounded-[9px] px-3 py-2">
+    <div className="bg-[#fbfdfe] border border-line-soft rounded-[8px] px-3 py-2">
       <div className="text-[10.5px] text-ink3">{label}</div>
       <div className="text-[13px] font-mono text-ink truncate" title={value}>
         {value || "—"}
       </div>
-      <div className="text-[10px] text-ink3 mt-0.5">{hint}</div>
+      <div className="text-[10.5px] text-ink3 mt-0.5">{hint}</div>
     </div>
   );
 }
@@ -769,9 +769,7 @@ export function AssetsPage({
       <div className="flex items-center mb-[18px]">
         <h3 className="text-[17px] font-bold">积分与诊断</h3>
         <span
-          className={`text-[12px] font-semibold px-2.5 py-0.5 rounded-full border ml-3 ${
-            targetIde === "trae-cn" ? "bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a]" : "bg-[#fbfdfe] border-line text-ink2"
-          }`}
+          className={`chip ml-3 ${targetIde === "trae-cn" ? "chip-warn" : "chip-neutral"}`}
         >
           {targetIde === "trae" ? "Trae 国际版" : "Trae CN"}
         </span>
@@ -928,7 +926,7 @@ export function AssetsPage({
                       >
                         {r.title || r.sessionId}
                         {r.truncated && (
-                          <span className="text-[10px] text-[#c2731a] ml-1" title="该会话存在未统计的消息（单次最多读取 400 条）">
+                          <span className="text-[10.5px] text-[#c2731a] ml-1" title="该会话存在未统计的消息（单次最多读取 400 条）">
                             ·仅统计前 400 条
                           </span>
                         )}
@@ -1159,7 +1157,7 @@ export function AssetsPage({
                         <Chip text={`开发标识 ${d.hasDev ? "✓" : "✗"}`} tone={d.hasDev ? "ok" : "bad"} />
                         <Chip text={`统计标识 ${d.hasSqm ? "✓" : "✗"}`} tone={d.hasSqm ? "ok" : "bad"} />
                         {d.missing.length > 0 && (
-                          <span className="text-[10px] text-[#c2731a]" title={`缺失：${d.missing.join("、")}`}>
+                          <span className="text-[10.5px] text-[#c2731a]" title={`缺失：${d.missing.join("、")}`}>
                             缺 {d.missing.length} 项
                           </span>
                         )}
@@ -1192,7 +1190,7 @@ export function AssetsPage({
             </div>
           </Section>
 
-          <div className="bg-card border border-line rounded-[12px] shadow-card px-4 py-3">
+          <div className="panel px-4 py-3">
             <div className="flex items-center gap-3">
               <span className="text-[13px] font-semibold">高级 / 开发者</span>
               <span className="text-[11px] text-ink3">
@@ -1281,7 +1279,7 @@ export function AssetsPage({
                   <>
                     <div className="flex items-center gap-2.5">
                       <input
-                        className="flex-none w-[240px] h-[30px] bg-white border border-line rounded-[10px] px-3 text-[12px] outline-none"
+                        className="input flex-none w-[240px]"
                         placeholder="过滤命令名…"
                         value={cmdFilter}
                         onChange={(e) => setCmdFilter(e.target.value)}
@@ -1292,7 +1290,7 @@ export function AssetsPage({
                       {cmdVisible.slice(0, 200).map((c) => (
                         <button
                           key={c}
-                          className={`text-left font-mono text-[11px] px-1.5 py-[3px] rounded-[6px] cursor-pointer hover:bg-[#f0f6f7] ${
+                          className={`text-left font-mono text-[11px] px-1.5 py-[3px] rounded-[8px] cursor-pointer hover:bg-[#f0f6f7] ${
                             c === cmdSel ? "bg-accent-soft text-accent" : "text-ink2"
                           }`}
                           onClick={() => setCmdSel(c)}
@@ -1302,7 +1300,7 @@ export function AssetsPage({
                         </button>
                       ))}
                     </div>
-                    <div className="mt-3 bg-[#fbfdfe] border border-line-soft rounded-[9px] p-3">
+                    <div className="mt-3 bg-[#fbfdfe] border border-line-soft rounded-[8px] p-3">
                       <div className="text-[10.5px] text-ink3 mb-1.5">
                         调用白名单内的只读/幂等命令（写、删除、分叉类命令将被拒绝）
                       </div>
@@ -1310,7 +1308,7 @@ export function AssetsPage({
                         {SESSION_PRESETS.map((p) => (
                           <button
                             key={p.command}
-                            className="text-[10.5px] px-2 py-[3px] rounded-full border border-line bg-white text-ink2 cursor-pointer hover:border-accent hover:text-accent"
+                            className="chip chip-neutral cursor-pointer hover:border-accent hover:text-accent"
                             onClick={() => {
                               setCmdSel(p.command);
                               setCmdArgsText(p.args);
@@ -1322,13 +1320,13 @@ export function AssetsPage({
                       </div>
                       <div className="flex items-center gap-2.5">
                         <input
-                          className="flex-1 min-w-0 h-[30px] bg-white border border-line rounded-[9px] px-2.5 font-mono text-[11.5px] outline-none"
+                          className="input flex-1 min-w-0"
                           value={cmdSel}
                           onChange={(e) => setCmdSel(e.target.value)}
                           placeholder="命令 id"
                         />
                         <input
-                          className="flex-none w-[200px] h-[30px] bg-white border border-line rounded-[9px] px-2.5 font-mono text-[11.5px] outline-none"
+                          className="input flex-none w-[200px]"
                           value={cmdArgsText}
                           onChange={(e) => setCmdArgsText(e.target.value)}
                           placeholder='参数 JSON 数组，如 ["key"]'
@@ -1338,7 +1336,7 @@ export function AssetsPage({
                         </button>
                       </div>
                       {cmdResult && (
-                        <pre className="mt-2 bg-[#f7fafb] border border-line-soft rounded-[9px] p-3 text-[10.5px] font-mono text-ink2 overflow-x-auto max-h-[240px]">
+                        <pre className="mt-2 bg-[#f7fafb] border border-line-soft rounded-[8px] p-3 text-[10.5px] font-mono text-ink2 overflow-x-auto max-h-[240px]">
                           {cmdResult}
                         </pre>
                       )}

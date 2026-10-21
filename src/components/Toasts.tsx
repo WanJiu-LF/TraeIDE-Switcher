@@ -48,7 +48,7 @@ function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: (id: strin
 
   return (
     <div
-      className={`${leaving ? "toast-out" : "toast-in"} relative flex items-stretch bg-card rounded-[10px] shadow-soft border border-line overflow-hidden max-w-[320px]`}
+      className={`${leaving ? "toast-out" : "toast-in"} relative flex items-stretch bg-card rounded-[12px] shadow-soft border border-line overflow-hidden max-w-[320px]`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         setHovered(false);
@@ -59,7 +59,7 @@ function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: (id: strin
       <div className="flex-1 px-3.5 py-2.5">
         <div className={`text-[11px] font-semibold ${KIND_STYLE[item.kind].badge}`}>{KIND_LABEL[item.kind]}</div>
         <div className="text-[12.5px] text-ink mt-0.5">{item.title}</div>
-        {item.desc && <div className="text-[11px] text-ink3 mt-0.5">{item.desc}</div>}
+        {item.desc && <div className="text-[11.5px] text-ink3 mt-0.5">{item.desc}</div>}
       </div>
       <button
         className="px-2.5 text-ink3 hover:text-ink cursor-pointer transition-colors duration-150"

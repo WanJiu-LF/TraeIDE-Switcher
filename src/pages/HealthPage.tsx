@@ -36,10 +36,10 @@ interface RowProps {
 }
 
 const STATE_CLS: Record<RowProps["state"], string> = {
-  ok: "bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]",
-  warn: "bg-[#fff4e5] border-[#ffe0bd] text-[#c2731a]",
-  bad: "bg-[#fdeeee] border-[#f6cfcf] text-[#d24545]",
-  unknown: "bg-[#fbfdfe] border-line text-ink3",
+  ok: "chip chip-ok",
+  warn: "chip chip-warn",
+  bad: "chip chip-bad",
+  unknown: "chip chip-neutral",
 };
 
 function Row({ title, desc, state, text, action }: RowProps) {
@@ -52,7 +52,7 @@ function Row({ title, desc, state, text, action }: RowProps) {
         </div>
       </div>
       <div className="ml-auto flex items-center gap-2.5 flex-none">
-        <span className={`text-[10.5px] px-2 py-0.5 rounded-full border ${STATE_CLS[state]}`}>{text}</span>
+        <span className={STATE_CLS[state]}>{text}</span>
         {action}
       </div>
     </div>
@@ -105,7 +105,7 @@ export function HealthPage({
         </button>
       </div>
 
-      <div className="stagger-in bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel stagger-in mb-4">
         <Row
           title="Trae 安装位置"
           desc={installPath || "未找到 Trae 安装位置，请在设置中选择 Trae 目录"}
@@ -135,7 +135,7 @@ export function HealthPage({
         />
       </div>
 
-      <div className="stagger-in bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel stagger-in mb-4">
         <Row
           title="无感换号支持文件"
           desc="安装至 Trae 安装目录，Trae 运行中即可直接换号，并同步账号的设备身份"
@@ -188,7 +188,7 @@ export function HealthPage({
         />
       </div>
 
-      <div className="stagger-in bg-card border border-line rounded-[12px] shadow-card">
+      <div className="panel stagger-in">
         <Row
           title="无感换号支持是否已生效"
           desc="检查已安装的文件是否已在 Trae 中生效"

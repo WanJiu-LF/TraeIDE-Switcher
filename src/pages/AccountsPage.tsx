@@ -173,9 +173,7 @@ export function AccountsPage(props: AccountsPageProps) {
       <div className="flex items-center mb-[18px]">
         <h3 className="text-[17px] font-bold">账号池</h3>
         <span
-          className={`text-[12px] font-semibold px-2.5 py-0.5 rounded-full border ml-3 ${
-            isCn ? "bg-[#fff4e8] border-[#ffe0bd] text-[#c2731a]" : "bg-[#fbfdfe] border-line text-ink2"
-          }`}
+          className={`chip ml-3 ${isCn ? "chip-warn" : "chip-neutral"}`}
         >
           {isCn ? "Trae CN" : "Trae 国际版"}
         </span>
@@ -341,7 +339,7 @@ export function AccountsPage(props: AccountsPageProps) {
 
       {accounts.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-[380px] gap-4">
-          <div className="w-16 h-16 rounded-[20px] bg-accent-soft text-accent flex items-center justify-center">
+          <div className="w-16 h-16 rounded-[16px] bg-accent-soft text-accent flex items-center justify-center">
             <IconSearch className="w-7 h-7" />
           </div>
           <div className="text-[14px] font-semibold">账号池为空</div>

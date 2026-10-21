@@ -269,7 +269,7 @@ export function AddAccountDialog({
       onClick={onClose}
     >
       <div
-        className={`${closing ? "dialog-out" : "dialog-in"} bg-card rounded-[16px] shadow-soft border border-line w-[560px] overflow-hidden`}
+        className={`${closing ? "dialog-out" : "dialog-in"} bg-card rounded-[12px] shadow-soft border border-line w-[560px] overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center px-6 pt-5 pb-4">
@@ -306,7 +306,7 @@ export function AddAccountDialog({
                 placeholder="留空则使用设置页默认值"
               />
             </Field>
-            <div className="text-[11px] text-ink3 -mt-2">
+            <div className="text-[11.5px] text-ink3 -mt-2">
               该账号剩余额度低于上述百分比时，自动换号将其视为已耗尽（仅对 Trae 每日额度生效；留空则使用设置页默认值）
             </div>
             <div className="flex justify-end gap-2.5 mt-6">
@@ -330,18 +330,18 @@ export function AddAccountDialog({
           </div>
         ) : (
           <>
-            <div className="flex gap-1.5 px-6">
-              {TABS.map((t) => (
-                <button
-                  key={t.key}
-                  className={`px-3.5 py-[7px] rounded-[9px] text-[12.5px] cursor-pointer ${
-                    tab === t.key ? "bg-accent-soft text-accent font-semibold" : "text-ink2 hover:bg-[#f0f6f7]"
-                  }`}
-                  onClick={() => setTab(t.key)}
-                >
-                  {t.label}
-                </button>
-              ))}
+            <div className="px-6">
+              <div className="seg flex w-full">
+                {TABS.map((t) => (
+                  <button
+                    key={t.key}
+                    className={`seg-tab flex-1 ${tab === t.key ? "seg-tab-active" : ""}`}
+                    onClick={() => setTab(t.key)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="px-6 py-5 min-h-[300px]">
@@ -363,7 +363,7 @@ export function AddAccountDialog({
                       <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="选填" />
                     </Field>
                   </div>
-                  <div className="text-[11px] text-ink3 mt-2 leading-relaxed space-y-0.5">
+                  <div className="text-[11.5px] text-ink3 mt-2 leading-relaxed space-y-0.5">
                     <div>获取 Token（先在浏览器登录对应站点，再从开发者工具复制）：</div>
                     <div>
                       · 国际版：登录 <span className="text-ink2">https://www.trae.ai</span> → F12 → Application → Local Storage →
@@ -451,11 +451,11 @@ export function AddAccountDialog({
                                 <div className="text-[11px] text-ink3">{s.email}</div>
                               </div>
                               <div className="ml-auto flex gap-1.5">
-                                <span className="text-[10.5px] px-2 py-0.5 rounded-full border border-line text-ink2">
+                                <span className="chip chip-neutral">
                                   {s.ide === "trae-cn" ? "Trae CN" : "Trae"}
                                 </span>
                                 {dup && (
-                                  <span className="text-[10.5px] px-2 py-0.5 rounded-full border border-line text-ink3">
+                                  <span className="chip chip-neutral text-ink3">
                                     已存在
                                   </span>
                                 )}
@@ -517,7 +517,7 @@ export function AddAccountDialog({
                       {capturePhase === "pending" && (
                         <div className="text-center">
                           <div className="text-[12.5px] text-ink2">登录窗口已打开，请在新窗口中完成 Trae 登录</div>
-                          <div className="text-[11px] text-ink3 mt-1">通过官方登录页完成登录，将自动保存 Token</div>
+                          <div className="text-[11.5px] text-ink3 mt-1">通过官方登录页完成登录，将自动保存 Token</div>
                           <button className="btn-ghost mt-3" onClick={cancelCapture}>
                             取消
                           </button>

@@ -60,14 +60,12 @@ function Seg<T extends number | string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="flex bg-[#f1f6f8] rounded-[9px] p-[3px] gap-0.5">
+    <div className="seg">
       {options.map((o) => (
         <button
           key={String(o.value)}
           onClick={() => onChange(o.value)}
-          className={`px-3 py-1 rounded-[7px] text-[11.5px] cursor-pointer ${
-            value === o.value ? "bg-white text-accent font-semibold" : "text-ink2"
-          }`}
+          className={`seg-tab ${value === o.value ? "seg-tab-active" : ""}`}
         >
           {o.label}
         </button>
@@ -299,7 +297,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         <div className="text-[12px] text-ink3 ml-3">修改后立即生效</div>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel mb-4">
         <Row title="自动换号" desc="账号额度耗尽时自动切换到下一个可用账号，无需手动操作">
           <Toggle on={settings.auto_switch} onToggle={() => apply({ auto_switch: !settings.auto_switch })} />
         </Row>
@@ -349,7 +347,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel mb-4">
         {/* 每日定时签名为 CN 专有活动，国际版不展示该设置 */}
         {targetIde === "trae-cn" && (
           <Row title="每日定时签到" desc="到达设定时间时自动为全部 Trae CN 账号签到">
@@ -369,7 +367,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel mb-4">
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">账号库备份与恢复</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">
@@ -399,7 +397,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel mb-4">
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">账号包导入导出（跨机迁移）</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">
@@ -444,7 +442,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             <button
               className={
                 portableConfirm
-                  ? "h-9 px-4 rounded-[10px] bg-bad text-white text-[12.5px] font-semibold cursor-pointer transition-all duration-150 hover:opacity-90 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed"
+                  ? "btn-danger"
                   : "btn-primary"
               }
               disabled={portableBusy || portablePass.trim().length < 6 || !portableSrc.trim()}
@@ -456,7 +454,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </div>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel mb-4">
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">网络与更新</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">
@@ -483,7 +481,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel mb-4">
         <Row title="开机自启" desc="开机时自动启动并最小化至托盘">
           <Toggle on={settings.auto_start} onToggle={toggleAutoStart} />
         </Row>
@@ -495,7 +493,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card mb-4">
+      <div className="panel mb-4">
         <Row title="Trae 安装路径" desc={pathDesc(paths?.trae)}>
           <input
             className="input w-[300px]"
@@ -516,7 +514,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
       </div>
 
-      <div className="bg-card border border-line rounded-[12px] shadow-card">
+      <div className="panel">
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">无感换号通道</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">
@@ -525,9 +523,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </div>
         <Row title="无感换号支持状态" desc={`当前针对：${targetIde === "trae-cn" ? "Trae CN" : "Trae"}`}>
           <span
-            className={`text-[10.5px] px-2 py-0.5 rounded-full border ${
-              injected ? "border-accent-line text-accent bg-accent-soft" : "border-line text-ink3"
-            }`}
+            className={injected ? "chip chip-accent" : "chip chip-neutral"}
           >
             {injected === null ? "检测中…" : injected ? "已安装" : "未安装"}
           </span>
@@ -548,13 +544,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
         <Row title="切换助手" desc="无感换号主要依赖它，随 Trae 常驻后台，显示在线即可使用">
           <span
-            className={`text-[10.5px] px-2 py-0.5 rounded-full border ${
-              shim?.installed && shim.alive
-                ? "border-accent-line text-accent bg-accent-soft"
-                : shim?.installed
-                  ? "border-line text-ink2"
-                  : "border-line text-ink3"
-            }`}
+            className={shim?.installed && shim.alive ? "chip chip-accent" : "chip chip-neutral"}
           >
             {shim === null ? "检测中…" : shim.installed ? (shim.alive ? "在线" : "已安装但未运行") : "未安装"}
           </span>
