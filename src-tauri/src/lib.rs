@@ -12,6 +12,7 @@ pub fn run() {
             commands::scan_local_account,
             commands::import_local_account,
             commands::add_account,
+            commands::detect_ide,
             commands::delete_account,
             commands::update_account,
             commands::set_account_pinned,

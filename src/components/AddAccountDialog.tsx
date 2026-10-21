@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { Account, Ide } from "../types";
-import { cancelLogin, errText, pollLogin, scanLocalAccount, startLogin, type AccountSummary } from "../bridge";
+import { cancelLogin, detectAccountIde, errText, pollLogin, scanLocalAccount, startLogin, type AccountSummary } from "../bridge";
 import { IconClose, IconSearch } from "../icons";
 
 export type AccountDraft =
@@ -32,8 +32,15 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "login", label: "登录窗口添加" },
 ];
 
-function detectIde(cred: string, fallback: Ide): Ide {
-  return /cn|china|volc|bytedance/i.test(cred) ? "trae-cn" : fallback;
+/** 粘贴容错：允许整行「邮箱<TAB>密文」、带 `iCubeAuthInfo://` 前缀或两端引号 */
+function normalizeCred(raw: string): string {
+  let s = raw.trim();
+  const tab = s.lastIndexOf("\t");
+  if (tab >= 0) s = s.slice(tab + 1).trim();
+  // 邮箱与密文用空格分隔的情形（如从聊天工具里复制）
+  if (/^\S+@\S+\s+[A-Za-z0-9+/=]{100,}$/.test(s)) s = s.split(/\s+/).pop() || s;
+  s = s.replace(/^iCubeAuthInfo:\/\//i, "").trim();
+  return s.replace(/^["']|["']$/g, "").trim();
 }
 
 export function AddAccountDialog({
@@ -50,6 +57,7 @@ export function AddAccountDialog({
   const [cred, setCred] = useState("");
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
+  const [pasting, setPasting] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [results, setResults] = useState<AccountSummary[] | null>(null);
   const [scanError, setScanError] = useState("");
@@ -89,6 +97,7 @@ export function AddAccountDialog({
       setCred("");
       setName(editing?.name ?? "");
       setNote(editing?.note ?? "");
+      setPasting(false);
       setScanning(false);
       setResults(null);
       setScanError("");
@@ -126,10 +135,22 @@ export function AddAccountDialog({
 
   const editingEmail = editing?.email ?? "";
 
-  const submitPaste = () => {
-    const authBlob = cred.trim();
-    if (!authBlob || !name.trim()) return;
-    onSave({ kind: "paste", ide: detectIde(authBlob, targetIde), name, note, authBlob });
+  const submitPaste = async () => {
+    if (pasting) return;
+    const authBlob = normalizeCred(cred);
+    if (!authBlob) {
+      onToast("error", "请先粘贴 Token", "支持 iCubeAuthInfo 密文串，或「邮箱 + Tab + 密文」整行");
+      return;
+    }
+    setPasting(true);
+    let ide = targetIde;
+    try {
+      ide = await detectAccountIde(authBlob);
+    } catch {
+      // 解密失败时按当前版本提交，后端会返回具体原因并由外层 toast 展示
+    }
+    setPasting(false);
+    onSave({ kind: "paste", ide, name: name.trim(), note, authBlob });
   };
 
   const startScan = async () => {
@@ -307,7 +328,7 @@ export function AddAccountDialog({
                       className="input h-[96px] py-2.5 resize-none items-start"
                       value={cred}
                       onChange={(e) => setCred(e.target.value)}
-                      placeholder="粘贴从浏览器复制的 Token（iCubeAuthInfo:// 加密串）"
+                      placeholder="粘贴 iCubeAuthInfo:// 密文，或导入文件的整行「邮箱 + Tab + 密文」"
                     />
                   </Field>
                   <div className="flex gap-3">
@@ -318,8 +339,21 @@ export function AddAccountDialog({
                       <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="选填" />
                     </Field>
                   </div>
-                  <div className="text-[11px] text-ink3 mt-1">
-                    程序将根据 Token 自动识别 Trae / Trae CN；无法识别时，使用当前选中版本（{targetIde === "trae-cn" ? "Trae CN" : "Trae"}）
+                  <div className="text-[11px] text-ink3 mt-2 leading-relaxed space-y-0.5">
+                    <div>获取 Token（先在浏览器登录对应站点，再从开发者工具复制）：</div>
+                    <div>
+                      · 国际版：登录 <span className="text-ink2">https://www.trae.ai</span> → F12 → Application → Local Storage →
+                      选中 <span className="text-ink2">https://www.trae.ai</span> → 复制键 <span className="text-ink2">iCubeAuthInfo://icube.cloudide</span> 的值
+                    </div>
+                    <div>
+                      · 国内版：登录 <span className="text-ink2">https://www.trae.cn</span> → 同上，选中 <span className="text-ink2">https://www.trae.cn</span> →
+                      复制同一个键的值
+                    </div>
+                    <div>· 也可直接粘贴本工具导出的整行「邮箱 + Tab + 密文」，邮箱前缀会自动剥离</div>
+                    <div>
+                      · 版本按密文内的 host / userTag / userRegion 自动判定；解密失败时使用当前选中版本（
+                      {targetIde === "trae-cn" ? "Trae CN" : "Trae"}）
+                    </div>
                   </div>
                   <div className="flex justify-end gap-2.5 mt-6">
                     <button className="btn-ghost" onClick={onClose}>
@@ -327,10 +361,10 @@ export function AddAccountDialog({
                     </button>
                     <button
                       className="btn-primary disabled:opacity-50"
-                      disabled={!cred.trim()}
+                      disabled={!cred.trim() || pasting}
                       onClick={submitPaste}
                     >
-                      识别并添加
+                      {pasting ? "识别中…" : "识别并添加"}
                     </button>
                   </div>
                 </div>

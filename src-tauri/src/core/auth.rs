@@ -26,6 +26,8 @@ pub struct UserRegion {
 pub struct AuthInfo {
     #[serde(default)]
     pub token: String,
+    #[serde(default)]
+    pub host: String,
     #[serde(default, rename = "refreshToken")]
     pub refresh_token: String,
     #[serde(default, rename = "userId")]
@@ -63,6 +65,37 @@ pub fn parse_auth_blob(blob_b64: &str) -> Result<AuthInfo, AuthError> {
         bytecrypto::decrypt_string(blob_b64).map_err(|e| AuthError::Crypto(e.to_string()))?;
     let info: AuthInfo = serde_json::from_str(&plain).map_err(|e| AuthError::Json(e.to_string()))?;
     Ok(info)
+}
+
+/// 凭据归属判定：只认密文解密后的语义字段，不对 base64 密文做文本匹配
+/// （密文是随机字节，`/cn|china|volc|bytedance/` 这类猜测会随机误判）。
+/// 依据：host 域名、userTag、userRegion 区域三者任一指向国内即 CN，否则按国际版。
+pub fn detect_ide(blob_b64: &str) -> Result<super::paths::IdeKind, AuthError> {
+    let info = parse_auth_blob(blob_b64)?;
+    let host = info.host.to_lowercase();
+    let cn_host = host.contains("trae.cn") || host.contains("trae.com.cn");
+    let tag = info
+        .account
+        .as_ref()
+        .map(|a| a.user_tag.trim().to_lowercase())
+        .unwrap_or_default();
+    let region = info
+        .user_region
+        .as_ref()
+        .map(|r| {
+            format!(
+                "{} {}",
+                r.region.trim().to_lowercase(),
+                r.ai_region.trim().to_lowercase()
+            )
+        })
+        .unwrap_or_default();
+    let cn_region = region.split_whitespace().any(|x| x == "cn");
+    Ok(if cn_host || tag == "cn" || cn_region {
+        super::paths::IdeKind::TraeCn
+    } else {
+        super::paths::IdeKind::Trae
+    })
 }
 
 /// 凭据修复：外部提取/旧版的 blob account 常缺 storeRegion/userTag 等登录必需字段，

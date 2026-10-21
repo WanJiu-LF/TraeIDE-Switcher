@@ -189,7 +189,11 @@ pub async fn add_account(
 }
 
 fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdResult<AccountSummary> {
-    let kind = parse_ide(ide)?;
+    // 归属以密文解密后的 host/userTag/userRegion 为准；前端传入的 ide 只作解析失败时的兜底
+    let kind = match crate::core::auth::detect_ide(auth_blob) {
+        Ok(k) => k,
+        Err(_) => parse_ide(ide)?,
+    };
     // 入库即自愈：外部提取的凭据常缺登录必需字段
     let auth_blob = crate::core::auth::repair_auth_blob(kind, auth_blob).map_err(err)?;
     let info = parse_auth_blob(auth_blob.as_str()).map_err(err)?;
@@ -223,6 +227,17 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
     let mut summary = to_summary(&bundle);
     summary.replaced = replaced;
     Ok(summary)
+}
+
+/// 粘贴凭据 → 版本判定（解密后按 host / userTag / userRegion 判断，供前端「识别并添加」预填）
+#[tauri::command]
+pub fn detect_ide(auth_blob: String) -> CmdResult<String> {
+    let kind = crate::core::auth::detect_ide(&auth_blob).map_err(err)?;
+    Ok(match kind {
+        IdeKind::Trae => "trae",
+        IdeKind::TraeCn => "trae-cn",
+    }
+    .to_string())
 }
 
 #[tauri::command]

@@ -120,6 +120,12 @@ export async function addAccount(ide: Ide, name: string, note: string, authBlob:
   return normalizeSummary(await invoke<RawSummary>("add_account", { ide, name, note, authBlob }));
 }
 
+/** 解密凭据判定版本（host / userTag / userRegion），不依赖密文文本猜测 */
+export async function detectAccountIde(authBlob: string): Promise<Ide> {
+  ensureTauri();
+  return toIde(await invoke<string>("detect_ide", { authBlob }));
+}
+
 export async function deleteAccount(id: string): Promise<void> {
   ensureTauri();
   await invoke("delete_account", { id });
