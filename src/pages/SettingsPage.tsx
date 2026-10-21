@@ -472,7 +472,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             onChange={(e) => apply({ http_proxy: e.target.value })}
           />
         </Row>
-        <Row title="自定义更新源" desc="留空使用内置 GitHub 发布源；填写 latest.json 完整地址可切换为镜像源">
+        <Row title="自定义更新源" desc="留空使用内置源（国内镜像 → GitHub 自动回退）；填写 latest.json 完整地址则排在最前，失败仍回退内置源">
           <input
             className="input w-[300px]"
             value={settings.update_endpoint}

@@ -1379,18 +1379,43 @@ pub fn update_settings(patch: serde_json::Value) -> CmdResult<crate::core::setti
 
 // ============ 应用内更新（走设置中的代理与自定义更新源）============
 
+/// 配置里声明的内置更新端点（顺序即优先级），用于自定义源之后的回退
+fn default_update_endpoints(app: &tauri::AppHandle) -> Vec<url::Url> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|v| v.get("endpoints"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str())
+                .filter_map(|s| url::Url::parse(s).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 检查 / 下载并安装应用更新。`install=false` 只检查并返回元信息；
 /// `install=true` 直接下载并安装（Windows 下安装器启动后本进程退出）。
-/// 更新源与代理均取自设置：update_endpoint 为空用内置默认端点，http_proxy 为空则直连。
+/// 更新源与代理均取自设置：自定义源排在最前，内置端点（镜像 → GitHub）依次兜底。
 #[tauri::command]
 pub async fn app_update(app: tauri::AppHandle, install: bool) -> CmdResult<String> {
     use tauri::Emitter;
     let s = crate::core::settings::load();
     let mut builder = app.updater_builder();
+    let mut endpoints: Vec<url::Url> = Vec::new();
     let ep = s.update_endpoint.trim();
     if !ep.is_empty() {
-        let url = url::Url::parse(ep).map_err(|e| format!("更新源地址无效：{e}"))?;
-        builder = builder.endpoints(vec![url]).map_err(err)?;
+        endpoints.push(url::Url::parse(ep).map_err(|e| format!("更新源地址无效：{e}"))?);
+    }
+    for u in default_update_endpoints(&app) {
+        if !endpoints.contains(&u) {
+            endpoints.push(u);
+        }
+    }
+    if !endpoints.is_empty() {
+        builder = builder.endpoints(endpoints).map_err(err)?;
     }
     let proxy = s.http_proxy.trim();
     if !proxy.is_empty() {
