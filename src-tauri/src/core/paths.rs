@@ -161,11 +161,7 @@ impl IdePaths {
 
     /// 可执行文件
     pub fn exe(&self) -> PathBuf {
-        let name = match self.ide {
-            IdeKind::Trae => "Trae.exe",
-            IdeKind::TraeCn => "Trae CN.exe",
-        };
-        self.install_dir.join(name)
+        self.install_dir.join(exe_name(self.ide))
     }
 }
 
@@ -186,16 +182,20 @@ fn manual_install_dir(ide: IdeKind) -> Option<PathBuf> {
         IdeKind::Trae => s.trae_path,
         IdeKind::TraeCn => s.trae_cn_path,
     };
-    let raw = raw.trim();
+    let raw = raw.trim().trim_matches('"');
     if raw.is_empty() {
         return None;
     }
     let dir = PathBuf::from(raw);
-    let exe = match ide {
+    dir.join(exe_name(ide)).exists().then_some(dir)
+}
+
+/// 可执行文件名（探测与校验共用）
+fn exe_name(ide: IdeKind) -> &'static str {
+    match ide {
         IdeKind::Trae => "Trae.exe",
         IdeKind::TraeCn => "Trae CN.exe",
-    };
-    dir.join(exe).exists().then_some(dir)
+    }
 }
 
 /// 从 HKCU Uninstall 注册表读 InstallLocation
@@ -214,12 +214,23 @@ fn detect_install_dir(ide: IdeKind) -> Option<PathBuf> {
         if !uninstall_entry_matches(ide, &display, &publisher) {
             continue;
         }
-        let loc: String = sub.get_value("InstallLocation").unwrap_or_default();
-        if !loc.is_empty() {
-            return Some(PathBuf::from(loc));
+        // InstallLocation 可能是带引号的串（实测 `"D:\data\TraeIDE-Switcher"`），
+        // 且 Uninstall 条目本身不作安装位置可信来源——必须目录下真有对应 exe 才采用
+        let loc = loc_clean(&sub.get_value::<String, _>("InstallLocation").unwrap_or_default());
+        if loc.is_empty() {
+            continue;
+        }
+        let dir = PathBuf::from(loc);
+        if dir.join(exe_name(ide)).exists() {
+            return Some(dir);
         }
     }
     None
+}
+
+/// 剥掉 InstallLocation 两层引号/空白（注册表写入方风格不统一）
+fn loc_clean(raw: &str) -> String {
+    raw.trim().trim_matches('"').trim().to_string()
 }
 
 /// Uninstall 条目归属判定。DisplayName 会随版本变（实测 10/16 CN 更新后
@@ -232,6 +243,11 @@ fn uninstall_entry_matches(ide: IdeKind, display: &str, publisher: &str) -> bool
         .filter(|c| !c.is_whitespace())
         .collect();
     if !d.contains("trae") {
+        return false;
+    }
+    // 排除本工具自身（`TraeIDE-Switcher` / `AI IDE Switcher`）：名称含 trae 且不含 cn，
+    // 会被下面的国际版规则误判，抓到换号器自己的安装目录
+    if d.contains("switcher") {
         return false;
     }
     let p = publisher.to_lowercase();
