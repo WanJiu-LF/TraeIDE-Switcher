@@ -8,8 +8,8 @@ export const PLAN_META: Record<Plan, { label: string; cls: string }> = {
   free: { label: "免费版", cls: "bg-[#fbfdfe] border-line text-ink2" },
   pro: { label: "Pro", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
   "pro-plus": { label: "Pro+", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
-  ultra: { label: "Ultra", cls: "bg-[#f3edff] border-[#e0d2ff] text-[#6b4fd7]" },
-  lite: { label: "Lite", cls: "bg-[#eafaf7] border-[#cdeee6] text-accent" },
+  ultra: { label: "Ultra", cls: "bg-[#eef2ff] border-[#d4dcff] text-[#4f5fd7]" },
+  lite: { label: "Lite", cls: "bg-[#e9f9ef] border-[#c3ecd2] text-[#1d9d54]" },
   paygo: { label: "按量", cls: "bg-[#fbfdfe] border-line text-ink2" },
   package: { label: "套餐", cls: "bg-[#fbfdfe] border-line text-ink2" },
   "solo-invite": { label: "邀请", cls: "bg-[#fbfdfe] border-line text-ink2" },
@@ -294,6 +294,19 @@ export function AccountCard({
     [],
   );
 
+  // 快速请求额度条：与积分/基础额度行同口径（11px 标签、6px 条、≤10% 告警）
+  const fast = account.fast;
+  const fastPct = fast ? (fast.unlimited ? 100 : fast.limit > 0 ? (fast.remaining / fast.limit) * 100 : 0) : 0;
+  const fastColor = !fast
+    ? "var(--color-line)"
+    : fast.unlimited
+      ? "var(--color-accent)"
+      : fast.remaining <= 0
+        ? "var(--color-bad)"
+        : fastPct <= 10
+          ? "var(--color-warn)"
+          : "var(--color-ok)";
+
   /** 收起时先播退场动画再卸载（延迟 140ms，与 .dropdown-out 时长一致） */
   const closeMenu = () => {
     if (menuTimer.current !== null) window.clearTimeout(menuTimer.current);
@@ -512,14 +525,25 @@ export function AccountCard({
         </>
       )}
 
-      {account.fast && (
-        <div className="flex items-center justify-between mt-2 text-[10.5px] text-ink3">
-          <span>快速请求</span>
-          <span className="text-ink2">
-            {account.fast.unlimited
-              ? "无限"
-              : `${account.fast.remaining.toLocaleString("zh-CN")} / ${account.fast.limit.toLocaleString("zh-CN")}`}
-          </span>
+      {fast && (
+        <div className="mt-2.5">
+          <div className="flex justify-between text-[11px] text-ink2 mb-[5px]">
+            <span>快速请求</span>
+            <b className={`font-mono ${!fast.unlimited && fast.remaining <= 0 ? "text-bad" : "text-ink"}`}>
+              {fast.unlimited
+                ? "无限"
+                : `${fast.remaining.toLocaleString("zh-CN")} / ${fast.limit.toLocaleString("zh-CN")}`}
+            </b>
+          </div>
+          <div className="h-[6px] bg-[#eef3f6] rounded-full overflow-hidden">
+            <div
+              className="bar-fill h-full rounded-full"
+              style={{
+                width: `${fast.remaining <= 0 && !fast.unlimited ? 0 : Math.max(fastPct, 2)}%`,
+                background: fastColor,
+              }}
+            />
+          </div>
         </div>
       )}
 
