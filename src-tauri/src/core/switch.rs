@@ -425,6 +425,7 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
     // 渲染层仍持有旧账号的 project/会话缓存，不重载时 send_message 会带旧 project_id → 992500「项目不存在」；
     // 重载后 initChatView 会用新账号重新建 project。
     let target = bundle.user_id.clone();
+    let kind = *ide;
     std::thread::spawn(move || {
         if archived.is_some() {
             match super::chat_history::import_pending(kind, &target) {
