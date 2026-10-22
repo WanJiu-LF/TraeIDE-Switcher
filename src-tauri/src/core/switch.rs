@@ -432,7 +432,7 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
                 Ok(n) if n > 0 => super::logger::log(
                     super::logger::Level::Info,
                     super::logger::Source::Switch,
-                    format!("已向新账号导入 {n} 条历史会话"),
+                    format!("已复制 {n} 个会话到新账号"),
                 ),
                 Ok(_) => {}
                 Err(e) => super::logger::log(
