@@ -77,7 +77,7 @@ export interface IdeStatus {
   chatPinned?: boolean;
 }
 
-const PREVIEW_ERROR = "当前为浏览器预览环境，该功能仅在 Trae 换号器桌面程序中使用";
+const PREVIEW_ERROR = "当前为浏览器预览环境，该功能仅在 TraeIDE-Switcher 桌面程序中使用";
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

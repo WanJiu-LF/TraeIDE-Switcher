@@ -40,7 +40,7 @@ export function Sidebar({ page, onPage, collapsed, onToggle, targetIde, onTarget
     >
       <div className={`flex items-center ${collapsed ? "justify-center px-0" : "gap-2.5 px-2.5"} pb-4`}>
         <IconLogo className="w-[26px] h-[26px] flex-none" />
-        {!collapsed && <span className="fade-in text-[14.5px] font-bold whitespace-nowrap">Trae 换号器</span>}
+        {!collapsed && <span className="fade-in text-[13.5px] font-bold whitespace-nowrap">TraeIDE-Switcher</span>}
       </div>
 
       {NAV.map((item) => {

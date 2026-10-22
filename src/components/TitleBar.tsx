@@ -55,9 +55,9 @@ export function TitleBar() {
       data-tauri-drag-region
       className="h-[42px] flex-none flex items-center px-2 pl-4 bg-[#fdfefe] border-b border-line-soft"
     >
-      <div className="flex items-center gap-2 text-[12.5px] text-ink2" title="Trae 换号器">
+      <div className="flex items-center gap-2 text-[12.5px] text-ink2" title="TraeIDE-Switcher">
         <IconLogo className="w-[18px] h-[18px] flex-none" />
-        Trae 换号器
+        TraeIDE-Switcher
       </div>
       <div className="ml-auto flex">
         <button

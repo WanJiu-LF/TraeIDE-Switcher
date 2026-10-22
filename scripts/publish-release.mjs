@@ -40,7 +40,7 @@ if (existsSync(lockProbe)) {
   try {
     closeSync(openSync(lockProbe, "r+"));
   } catch {
-    die("请先关闭正在运行的 Trae 换号器，再执行发布（构建产物被占用）");
+    die("请先关闭正在运行的 TraeIDE-Switcher，再执行发布（构建产物被占用）");
   }
 }
 
@@ -57,7 +57,7 @@ const notesArg = process.argv.find((a, i) => process.argv[i - 1] === "--notes");
 const url = `https://github.com/${RELEASE_REPO}/releases/download/v${version}/${exeName}`;
 const latest = {
   version,
-  notes: notesArg ?? `Trae 换号器 v${version}`,
+  notes: notesArg ?? `TraeIDE-Switcher v${version}`,
   pub_date: new Date().toISOString(),
   platforms: {
     "windows-x86_64": { signature: readFileSync(sigPath, "utf8").trim(), url },
