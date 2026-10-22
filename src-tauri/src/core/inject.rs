@@ -320,6 +320,38 @@ fn patch_pid_chat(src: &mut String) -> Result<bool, String> {
     Ok(true)
 }
 
+pub const TSW_SEND_PID_FLAG: &str = "__TSW_SENDPID__";
+
+/// 发送请求的项目替换：服务端只校验 project_id 归属、不校验 chat_session_id 归属。
+/// 固定 project_id 时界面仍显示原账号会话；发送时改传当前账号自己的 project_id，
+/// 消息即写回原会话，模型调用按当前账号计费。
+const SEND_PID_ANCHOR: &str = "let S=ei(e),k=await this.chatApi.sendMessage(eo(e))";
+
+const SEND_PID_CODE: &str = r#"let S=ei(e),__tsw_m=eo(e);try{/*__TSW_SENDPID__*/
+let __tsw_f="";try{const __tsw_s=this.storeService&&this.storeService.getSession?this.storeService.getSession(e.sessionId):null;__tsw_f=(__tsw_s&&__tsw_s.source&&(__tsw_s.source.local_folder||__tsw_s.source.remote_folder))||"";}catch(_e){}
+if(!__tsw_f&&__tsw_m){__tsw_f=(__tsw_m.source&&(__tsw_m.source.local_folder||__tsw_m.source.remote_folder))||__tsw_m.workspace_folder||"";}
+if(__tsw_f&&globalThis.__tsw_ai&&__tsw_m&&typeof __tsw_m==="object"){
+const __tsw_call=(s,m,d)=>globalThis.__tsw_ai.request({service:s,method:m,data:d,context:{}});
+const __tsw_norm=v=>String(v||"").replace(/\//g,"\\").replace(/\\+$/,"").toLowerCase();
+const __tsw_list=await __tsw_call("lite","list_projects_v2",{page_size:100});
+const __tsw_items=(__tsw_list&&__tsw_list.data&&__tsw_list.data.data&&__tsw_list.data.data.items)||(__tsw_list&&__tsw_list.data&&__tsw_list.data.items)||[];
+let __tsw_it=__tsw_items.find(x=>__tsw_norm(x.single_root_workspace_folder)===__tsw_norm(__tsw_f));
+if(!__tsw_it){const __tsw_c=await __tsw_call("lite","get_or_create_project_v2",{name:__tsw_f.split(/[\\\/]/).filter(Boolean).pop()||"workspace",source:"native-ide",project_kind:"workspace",workspace_type:"single_root",single_root_workspace_folder:__tsw_f,workspace_folders:[__tsw_f]});const __tsw_cd=(__tsw_c&&__tsw_c.data&&__tsw_c.data.data)||(__tsw_c&&__tsw_c.data)||{};if(__tsw_cd.project_id)__tsw_it={project_id:__tsw_cd.project_id};}
+if(__tsw_it&&__tsw_it.project_id)__tsw_m.project_id=__tsw_it.project_id;
+}
+}catch(_e){}let k=await this.chatApi.sendMessage(__tsw_m)"#;
+
+fn patch_send_project(src: &mut String) -> Result<bool, String> {
+    if src.contains(TSW_SEND_PID_FLAG) {
+        return Ok(false);
+    }
+    let Some(pos) = src.find(SEND_PID_ANCHOR) else {
+        return Err("特征锚未命中：chatApi.sendMessage(eo(e))".into());
+    };
+    src.replace_range(pos..pos + SEND_PID_ANCHOR.len(), SEND_PID_CODE);
+    Ok(true)
+}
+
 fn ensure_bak_named(file: &std::path::Path) -> io::Result<()> {
     let name = file.file_name().unwrap_or_default().to_string_lossy().to_string();
     let bak = file.with_file_name(format!("{name}.switcher.bak"));
@@ -339,11 +371,36 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
         return Err(io::Error::new(io::ErrorKind::NotFound, "未找到 ai-modules-chat 模块"));
     }
     let mut src = std::fs::read_to_string(chat)?;
-    if src.contains(TSW_PID_FLAG) {
-        return Ok(InjectStatus::AlreadyPatched);
+    let mut changed = false;
+    let mut errs = Vec::new();
+    if !src.contains(TSW_PID_FLAG) {
+        match patch_pid_chat(&mut src) {
+            Ok(true) => changed = true,
+            Ok(false) => {}
+            Err(e) => errs.push(e),
+        }
+    }
+    if !src.contains(TSW_SEND_PID_FLAG) {
+        match patch_send_project(&mut src) {
+            Ok(true) => changed = true,
+            Ok(false) => {}
+            Err(e) => errs.push(format!("发送项目替换失败：{e}")),
+        }
+    }
+    if !changed {
+        if errs.is_empty() {
+            return Ok(InjectStatus::AlreadyPatched);
+        }
+        return Err(io::Error::new(io::ErrorKind::NotFound, errs.join("; ")));
+    }
+    if !errs.is_empty() {
+        crate::core::logger::log(
+            crate::core::logger::Level::Warn,
+            crate::core::logger::Source::System,
+            format!("会话补丁部分未应用：{}", errs.join("; ")),
+        );
     }
     ensure_bak_named(chat)?;
-    patch_pid_chat(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     std::fs::write(chat, src)?;
     Ok(InjectStatus::Patched)
 }
@@ -802,10 +859,9 @@ fn scan_chat_pinned(paths: &IdePaths) -> bool {
     let wb = std::fs::read_to_string(paths.workbench_js())
         .map(|s| s.contains(TSW_PID_FLAG))
         .unwrap_or(false);
-    let chat = std::fs::read_to_string(paths.chat_module_js())
-        .map(|s| s.contains(TSW_PID_FLAG))
-        .unwrap_or(false);
-    // workbench 与 ai-modules-chat 双处齐全才算固定生效
+    let chat_src = std::fs::read_to_string(paths.chat_module_js()).unwrap_or_default();
+    let chat = chat_src.contains(TSW_PID_FLAG) && chat_src.contains(TSW_SEND_PID_FLAG);
+    // workbench 固定 + chat 模块固定与发送替换都齐全才算生效
     wb && chat
 }
 
