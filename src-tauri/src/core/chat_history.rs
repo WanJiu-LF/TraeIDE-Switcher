@@ -334,59 +334,80 @@ fn new_id() -> String {
     format!("{now:08x}{tail}")
 }
 
-fn migrate_session(
-    kind: IdeKind,
-    project_id: &str,
-    s: &Value,
-) -> Result<Option<String>, String> {
-    let Some(messages) = s.get("messages").and_then(|m| m.as_array()) else {
-        return Ok(None);
-    };
-    if messages.is_empty() {
-        return Ok(None);
+const MAX_TOTAL_BYTES: usize = 180_000;
+const MAX_MSG_BYTES: usize = 8_000;
+
+fn truncate_utf8(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
     }
-    let mut out = Vec::with_capacity(messages.len());
-    for (i, m) in messages.iter().enumerate() {
-        out.push(json!({
-            "model_name": "",
-            "role": m.get("role").and_then(|r| r.as_str()).unwrap_or("user"),
-            "display_model_name": "",
-            "content": m.get("content").and_then(|c| c.as_str()).unwrap_or(""),
-            "turn_id": new_id(),
-            "multi_media": [],
-            "status": "completed",
-            "turn_index": i,
-            "parsed_query": [],
-            "meta": {
-                "ckg_status": "to_build_ckg",
-                "has_workspace_mentioned": false,
-                "has_folder_mentioned": false,
-                "has_lint_error_mentioned": false,
-                "references": [],
-            },
-            "snapshot_id": "",
-            "ppe_env_name": "",
-            "revert_enable": false,
-            "exception": { "message": "", "code": 0 },
-        }));
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
     }
-    let session_id = new_id();
-    let data = json!({
-        "session_id": session_id,
-        "title": s.get("title").and_then(|t| t.as_str()).unwrap_or(""),
-        "created_at": s.get("created_at").and_then(|t| t.as_i64()).unwrap_or(0) * 1000,
-        "updated_at": s.get("updated_at").and_then(|t| t.as_i64()).unwrap_or(0) * 1000,
-        "project_id": project_id,
-        "messages": out,
-    });
-    let v = rpc(kind, "chat", "chat_migrate", data, 60_000)?;
-    let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-    if code != 0 {
-        let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("未知错误");
-        return Err(format!("chat_migrate {code}: {msg}"));
+    &s[..end]
+}
+
+/// 导入消息体：保留最近的部分并限制总量（服务端对超大 payload 会返回成功但不落库）
+fn import_messages(messages: &[Value]) -> Vec<Value> {
+    let mut picked: Vec<(String, String)> = Vec::new();
+    let mut budget = MAX_TOTAL_BYTES;
+    for m in messages.iter().rev() {
+        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+        let text = m.get("content").and_then(|c| c.as_str()).unwrap_or("").trim();
+        if text.is_empty() {
+            continue;
+        }
+        let text = truncate_utf8(text, MAX_MSG_BYTES);
+        if text.len() > budget {
+            break;
+        }
+        budget -= text.len();
+        picked.push((role.to_string(), text.to_string()));
     }
-    // 服务端可能返回 success 但并未落库（实测出现过）：以目标项目会话列表为准，
-    // 未出现则不记为已导入，下次切号会重试
+    picked.reverse();
+    // 会话必须首条为用户、末条为助手：仅用户消息的会话会被服务端返回 success 但不落库
+    // （agent 会话的助手正文在 task/plan_item 里，抽取后只剩用户提问）
+    if picked.first().map(|(r, _)| r.as_str()) != Some("user") {
+        picked.insert(0, ("user".into(), "（历史记录导入）".into()));
+    }
+    if picked.last().map(|(r, _)| r.as_str()) != Some("assistant") {
+        picked.push((
+            "assistant".into(),
+            "（历史记录导入：该轮回复为工具/计划卡片，无文本内容）".into(),
+        ));
+    }
+    picked
+        .into_iter()
+        .enumerate()
+        .map(|(i, (role, content))| {
+            json!({
+                "model_name": "",
+                "role": role,
+                "display_model_name": "",
+                "content": content,
+                "turn_id": new_id(),
+                "multi_media": [],
+                "status": "completed",
+                "turn_index": i,
+                "parsed_query": [],
+                "meta": {
+                    "ckg_status": "to_build_ckg",
+                    "has_workspace_mentioned": false,
+                    "has_folder_mentioned": false,
+                    "has_lint_error_mentioned": false,
+                    "references": [],
+                },
+                "snapshot_id": "",
+                "ppe_env_name": "",
+                "revert_enable": false,
+                "exception": { "message": "", "code": 0 },
+            })
+        })
+        .collect()
+}
+
+fn session_landed(kind: IdeKind, project_id: &str, session_id: &str) -> Result<bool, String> {
     let check = rpc(
         kind,
         "lite",
@@ -394,19 +415,67 @@ fn migrate_session(
         json!({ "in_project_id": [project_id], "page_size": 100 }),
         20_000,
     )?;
-    let landed = check
+    Ok(check
         .pointer("/data/data/items")
         .and_then(|a| a.as_array())
         .map(|items| {
             items
                 .iter()
-                .any(|it| it.get("chat_session_id").and_then(|x| x.as_str()) == Some(session_id.as_str()))
+                .any(|it| it.get("chat_session_id").and_then(|x| x.as_str()) == Some(session_id))
         })
-        .unwrap_or(false);
-    if !landed {
-        return Err("chat_migrate 未落库（服务端返回成功但目标项目中无该会话）".into());
+        .unwrap_or(false))
+}
+
+fn migrate_session(
+    kind: IdeKind,
+    project_id: &str,
+    s: &Value,
+) -> Result<Option<String>, String> {
+    let Some(raw) = s.get("messages").and_then(|m| m.as_array()) else {
+        return Ok(None);
+    };
+    let out = import_messages(raw);
+    if out.is_empty() {
+        return Ok(None);
     }
-    Ok(Some(session_id))
+    let mut last_err = String::new();
+    // 并发/服务端抖动都可能让 migrate 返回 success 但未落库：换新 id 重试一次
+    for _ in 0..2 {
+        let session_id = new_id();
+        let data = json!({
+            "session_id": session_id,
+            "title": s.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+            "created_at": s.get("created_at").and_then(|t| t.as_i64()).unwrap_or(0) * 1000,
+            "updated_at": s.get("updated_at").and_then(|t| t.as_i64()).unwrap_or(0) * 1000,
+            "project_id": project_id,
+            "messages": out.clone(),
+        });
+        let v = match rpc(kind, "chat", "chat_migrate", data, 60_000) {
+            Ok(v) => v,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+        if code != 0 {
+            let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("未知错误");
+            last_err = format!("chat_migrate {code}: {msg}");
+            continue;
+        }
+        // 落库有短暂延迟：最多等 3s 再判定
+        for i in 0..7 {
+            if i > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            match session_landed(kind, project_id, &session_id) {
+                Ok(true) => return Ok(Some(session_id)),
+                Ok(false) => last_err = "chat_migrate 未落库（目标项目中无该会话）".into(),
+                Err(e) => last_err = e,
+            }
+        }
+    }
+    Err(last_err)
 }
 
 fn current_uid(kind: IdeKind) -> Option<String> {
