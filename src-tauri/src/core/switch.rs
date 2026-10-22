@@ -370,6 +370,32 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
         return Ok("已切换登录态并重启 Trae".into());
     }
     let mid = current_machine_id(ide).ok_or("无法读取本机 machineId")?;
+    // 切号前归档旧账号会话（服务端按账号隔离，只有导出后才能在新账号里重建）
+    let prev_uid = scan_current(ide).ok().flatten().map(|p| p.user_id);
+    let archived = if prev_uid.as_deref() != Some(bundle.user_id.as_str())
+        && super::shim::ready_for_hotswap(*ide)
+    {
+        match super::chat_history::export(*ide) {
+            Ok(n) => {
+                super::logger::log(
+                    super::logger::Level::Info,
+                    super::logger::Source::Switch,
+                    format!("已归档当前账号 {n} 条会话"),
+                );
+                Some(n)
+            }
+            Err(e) => {
+                super::logger::log(
+                    super::logger::Level::Warn,
+                    super::logger::Source::Switch,
+                    format!("历史会话归档跳过：{e}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     let (result, channel) = if super::shim::ready_for_hotswap(*ide) {
         (hot_switch_via_shim(ide, bundle, &mid), "shim")
     } else {
@@ -395,13 +421,35 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
         super::logger::Source::Switch,
         format!("无感换号到 {}（{channel}）", bundle.name),
     );
-    Ok(match channel {
+    // 切号成功后把归档的旧账号会话导入新账号自己的 project（后台执行，不阻塞换号返回）
+    if archived.is_some() {
+        let kind = *ide;
+        let target = bundle.user_id.clone();
+        std::thread::spawn(move || match super::chat_history::import_pending(kind, &target) {
+            Ok(n) if n > 0 => super::logger::log(
+                super::logger::Level::Info,
+                super::logger::Source::Switch,
+                format!("已向新账号导入 {n} 条历史会话"),
+            ),
+            Ok(_) => {}
+            Err(e) => super::logger::log(
+                super::logger::Level::Warn,
+                super::logger::Source::Switch,
+                format!("历史会话导入未完成：{e}"),
+            ),
+        });
+    }
+    let mut msg: String = match channel {
         "shim" => "无感换号完成（切换助手通道，无需重启）".into(),
         _ if r.get("deviceUpdated").and_then(|v| v.as_bool()) == Some(true) => {
             "无感换号完成（备用通道，无需重启）".into()
         }
         _ => "无感换号完成（备用通道轻量模式：设备寄存未随号同步，建议安装无感换号支持后使用切换助手）".into(),
-    })
+    };
+    if let Some(n) = archived {
+        msg.push_str(&format!("，已归档 {n} 条会话"));
+    }
+    Ok(msg)
 }
 
 /// 续期后同步：若 storage.json 当前登录用户与目标一致，写入新凭据

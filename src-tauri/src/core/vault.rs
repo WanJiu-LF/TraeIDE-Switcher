@@ -24,7 +24,7 @@ fn blob(data: &[u8]) -> DATA_BLOB {
     }
 }
 
-fn protect(plain: &[u8]) -> io::Result<Vec<u8>> {
+pub(crate) fn protect(plain: &[u8]) -> io::Result<Vec<u8>> {
     unsafe {
         let mut in_blob = blob(plain);
         let mut out_blob = DATA_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
@@ -46,7 +46,7 @@ fn protect(plain: &[u8]) -> io::Result<Vec<u8>> {
     }
 }
 
-fn unprotect(cipher: &[u8]) -> io::Result<Vec<u8>> {
+pub(crate) fn unprotect(cipher: &[u8]) -> io::Result<Vec<u8>> {
     unsafe {
         let mut in_blob = blob(cipher);
         let mut out_blob = DATA_BLOB { cbData: 0, pbData: std::ptr::null_mut() };

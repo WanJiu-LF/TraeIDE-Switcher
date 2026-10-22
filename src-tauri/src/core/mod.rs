@@ -4,6 +4,7 @@ pub mod autoswitch;
 pub mod bytecrypto;
 pub mod bytecrypto_const;
 pub mod cdp;
+pub mod chat_history;
 pub mod history;
 pub mod http;
 pub mod inject;
