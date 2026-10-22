@@ -34,11 +34,18 @@ pub struct AccountBundle {
     #[serde(default)]
     pub tiny_storage: Option<serde_json::Value>,
     /// 服务端侧设备指纹（telemetry.devDeviceId / sqmId，随号）
-    /// machineId 三处保留本机原值（SQLCipher 密钥来源），不入包
+    /// （本机 machineId 三处仍保留原值，见 machine_id 注释）
     #[serde(default)]
     pub dev_device_id: Option<String>,
     #[serde(default)]
     pub sqm_id: Option<String>,
+    /// 该账号注册/采集时的 MachineID（sha256(machineid 文件)），续期 DeviceInfo 用。
+    /// 不下发到本机三处遥测，避免破坏本机 SQLCipher 密钥来源。
+    #[serde(default)]
+    pub machine_id: Option<String>,
+    /// 采集/签发时服务端收到的完整 DeviceInfo（原样重放，防止字段漂移触发风控）
+    #[serde(default)]
+    pub device_info: Option<serde_json::Value>,
     /// 置顶显示（账号池排序用，与凭据无关）
     #[serde(default)]
     pub pinned: bool,

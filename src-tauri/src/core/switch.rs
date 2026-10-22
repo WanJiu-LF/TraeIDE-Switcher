@@ -52,6 +52,8 @@ pub fn scan_current(ide: &IdeKind) -> io::Result<Option<AccountBundle>> {
         tiny_storage,
         dev_device_id: sj.get(DEV_DEVICE_ID_KEY).and_then(|v| v.as_str()).map(String::from),
         sqm_id: sj.get(SQM_ID_KEY).and_then(|v| v.as_str()).map(String::from),
+        machine_id: sj.get(MACHINE_ID_KEY).and_then(|v| v.as_str()).map(String::from),
+        device_info: None,
         pinned: false,
         threshold: None,
         refresh_error: None,

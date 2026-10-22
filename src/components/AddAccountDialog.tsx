@@ -51,7 +51,19 @@ function normalizeCred(raw: string): string {
 function parseCredBlobs(raw: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
+  const BUNDLE = "TRAEBUNDLE:";
   for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    // 注册机可迁移账号包：整行保留前缀，后端解外层后按内层 authBlob 入库
+    if (trimmed.toUpperCase().startsWith(BUNDLE)) {
+      const body = trimmed.slice(BUNDLE.length).replace(/^["']|["']$/g, "").trim();
+      if (body.length < 100 || !/^[A-Za-z0-9+/=]+$/.test(body)) continue;
+      const bundle = `${BUNDLE}${body}`;
+      if (seen.has(bundle)) continue;
+      seen.add(bundle);
+      out.push(bundle);
+      continue;
+    }
     const blob = normalizeCred(line);
     if (blob.length < 100 || !/^[A-Za-z0-9+/=]+$/.test(blob)) continue;
     if (seen.has(blob)) continue;
@@ -158,7 +170,7 @@ export function AddAccountDialog({
     if (pasting) return;
     const blobs = parseCredBlobs(cred);
     if (blobs.length === 0) {
-      onToast("error", "没有识别到有效 Token", "支持 iCubeAuthInfo 密文串，或「邮箱 + Tab + 密文」，可多行批量粘贴");
+      onToast("error", "没有识别到有效 Token", "支持 iCubeAuthInfo 密文串、注册机 TRAEBUNDLE: 账号包，或「邮箱 + Tab + 密文」，可多行批量粘贴");
       return;
     }
     setPasting(true);
@@ -375,6 +387,7 @@ export function AddAccountDialog({
                     </div>
                     <div>· 也可直接粘贴本工具导出的整行「邮箱 + Tab + 密文」，邮箱前缀会自动剥离</div>
                     <div>· 支持多行批量粘贴：每行一个密文（或整行邮箱 + Tab + 密文），一次性导入多个账号</div>
+                    <div>· 注册机导出的 <span className="text-ink2">TRAEBUNDLE:</span> 整行为可迁移账号包，含设备密钥与设备指纹，导入后可跨机续期</div>
                     <div>
                       · 版本按密文内的 host / userTag / userRegion 自动判定；解密失败时使用当前选中版本（
                       {targetIde === "trae-cn" ? "Trae CN" : "Trae"}）

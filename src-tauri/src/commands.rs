@@ -79,15 +79,38 @@ fn to_summary(b: &AccountBundle) -> AccountSummary {
 fn upsert_bundle(bundles: &mut Vec<AccountBundle>, mut bundle: AccountBundle) -> bool {
     match bundles.iter().position(|b| b.id == bundle.id) {
         Some(pos) => {
+            let old = bundles[pos].clone();
             if bundle.name.trim().is_empty() {
-                bundle.name = bundles[pos].name.clone();
+                bundle.name = old.name.clone();
             }
             if bundle.note.trim().is_empty() {
-                bundle.note = bundles[pos].note.clone();
+                bundle.note = old.note.clone();
             }
-            bundle.pinned = bundles[pos].pinned;
+            bundle.pinned = old.pinned;
             if bundle.threshold.is_none() {
-                bundle.threshold = bundles[pos].threshold;
+                bundle.threshold = old.threshold;
+            }
+            // 只换 token 时保留既有设备物料，否则一次重新粘贴就会把可迁移身份清空
+            if bundle.usertag_blob.is_none() {
+                bundle.usertag_blob = old.usertag_blob;
+            }
+            if bundle.ecdsa_blobs.is_empty() {
+                bundle.ecdsa_blobs = old.ecdsa_blobs;
+            }
+            if bundle.tiny_storage.is_none() {
+                bundle.tiny_storage = old.tiny_storage;
+            }
+            if bundle.dev_device_id.is_none() {
+                bundle.dev_device_id = old.dev_device_id;
+            }
+            if bundle.sqm_id.is_none() {
+                bundle.sqm_id = old.sqm_id;
+            }
+            if bundle.machine_id.is_none() {
+                bundle.machine_id = old.machine_id;
+            }
+            if bundle.device_info.is_none() {
+                bundle.device_info = old.device_info;
             }
             bundles[pos] = bundle;
             true
@@ -188,14 +211,73 @@ pub async fn add_account(
     r
 }
 
+const IMPORT_BUNDLE_PREFIX: &str = "TRAEBUNDLE:";
+
+/// 注册机可迁移账号包：authBlob + 设备密钥 + 设备指纹 + 签发时 DeviceInfo
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportedTraeBundle {
+    auth_blob: String,
+    #[serde(default)]
+    ecdsa_blobs: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    tiny_storage: Option<Value>,
+    #[serde(default)]
+    dev_device_id: Option<String>,
+    #[serde(default)]
+    sqm_id: Option<String>,
+    #[serde(default)]
+    machine_id: Option<String>,
+    #[serde(default)]
+    device_info: Option<Value>,
+}
+
+/// 解析 `TRAEBUNDLE:<base64(byteCrypto(JSON))>`；外层再加密一次，避免私钥明文落盘
+fn decode_trae_bundle(input: &str) -> CmdResult<ImportedTraeBundle> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let trimmed = input.trim();
+    if !trimmed.to_ascii_uppercase().starts_with(IMPORT_BUNDLE_PREFIX) {
+        return Err("缺少 TRAEBUNDLE 前缀".into());
+    }
+    let body = &trimmed[IMPORT_BUNDLE_PREFIX.len()..];
+    let blob = B64.decode(body.trim()).map_err(|_| "TRAEBUNDLE base64 解码失败".to_string())?;
+    let plain = crate::core::bytecrypto::decrypt(&blob)
+        .map_err(|e| format!("TRAEBUNDLE 解密失败: {e}"))?;
+    let text = String::from_utf8(plain).map_err(|_| "TRAEBUNDLE 不是 UTF-8".to_string())?;
+    serde_json::from_str(&text).map_err(|e| format!("TRAEBUNDLE JSON 解析失败: {e}"))
+}
+
 fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdResult<AccountSummary> {
+    let input = auth_blob.trim();
+    let imported = if input.to_ascii_uppercase().starts_with(IMPORT_BUNDLE_PREFIX) {
+        Some(decode_trae_bundle(input)?)
+    } else {
+        None
+    };
+    if let Some(b) = &imported {
+        crate::core::logger::log(
+            crate::core::logger::Level::Info,
+            crate::core::logger::Source::Account,
+            format!(
+                "导入 TRAEBUNDLE：machineId={} deviceInfo={} ecdsa={} tiny={}",
+                b.machine_id.as_deref().unwrap_or("无"),
+                b.device_info.is_some(),
+                b.ecdsa_blobs.len(),
+                b.tiny_storage.is_some()
+            ),
+        );
+    }
+    let auth_blob = imported
+        .as_ref()
+        .map(|b| b.auth_blob.clone())
+        .unwrap_or_else(|| input.to_string());
     // 归属以密文解密后的 host/userTag/userRegion 为准；前端传入的 ide 只作解析失败时的兜底
-    let kind = match crate::core::auth::detect_ide(auth_blob) {
+    let kind = match crate::core::auth::detect_ide(auth_blob.as_str()) {
         Ok(k) => k,
         Err(_) => parse_ide(ide)?,
     };
     // 入库即自愈：外部提取的凭据常缺登录必需字段
-    let auth_blob = crate::core::auth::repair_auth_blob(kind, auth_blob).map_err(err)?;
+    let auth_blob = crate::core::auth::repair_auth_blob(kind, auth_blob.as_str()).map_err(err)?;
     let info = parse_auth_blob(auth_blob.as_str()).map_err(err)?;
     let auto_name = info
         .account
@@ -212,10 +294,12 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
         status: AccountStatus::Normal,
         auth_blob,
         usertag_blob: None,
-        ecdsa_blobs: Default::default(),
-        tiny_storage: None,
-        dev_device_id: None,
-        sqm_id: None,
+        ecdsa_blobs: imported.as_ref().map(|b| b.ecdsa_blobs.clone()).unwrap_or_default(),
+        tiny_storage: imported.as_ref().and_then(|b| b.tiny_storage.clone()),
+        dev_device_id: imported.as_ref().and_then(|b| b.dev_device_id.clone()),
+        sqm_id: imported.as_ref().and_then(|b| b.sqm_id.clone()),
+        machine_id: imported.as_ref().and_then(|b| b.machine_id.clone()),
+        device_info: imported.as_ref().and_then(|b| b.device_info.clone()),
         pinned: false,
         threshold: None,
         refresh_error: None,
@@ -232,7 +316,17 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
 /// 粘贴凭据 → 版本判定（解密后按 host / userTag / userRegion 判断，供前端「识别并添加」预填）
 #[tauri::command]
 pub fn detect_ide(auth_blob: String) -> CmdResult<String> {
-    let kind = crate::core::auth::detect_ide(&auth_blob).map_err(err)?;
+    // TRAEBUNDLE 先剥外层，按内层 authBlob 判定版本，前端单条粘贴时才能正确路由
+    let inner = if auth_blob
+        .trim()
+        .to_ascii_uppercase()
+        .starts_with(IMPORT_BUNDLE_PREFIX)
+    {
+        decode_trae_bundle(&auth_blob)?.auth_blob
+    } else {
+        auth_blob
+    };
+    let kind = crate::core::auth::detect_ide(&inner).map_err(err)?;
     Ok(match kind {
         IdeKind::Trae => "trae",
         IdeKind::TraeCn => "trae-cn",
@@ -280,7 +374,7 @@ pub fn set_account_pinned(app: tauri::AppHandle, id: &str, pinned: bool) -> CmdR
 
 /// 续期：refreshToken 换新 token 并写回账号库（同用户时同步 storage.json）
 fn do_refresh(b: &mut AccountBundle) -> CmdResult<()> {
-    match crate::core::refresh::refresh_auth_blob(&b.ide, &b.auth_blob) {
+    match crate::core::refresh::refresh_auth_blob(&b.ide, b) {
         Ok(nb) => {
             b.auth_blob = nb;
             switch::sync_auth_if_same_user(&b.ide, &b.user_id, &b.auth_blob).map_err(err)?;

@@ -198,7 +198,7 @@ fn keepalive(window_ms: i64) {
                 expired += 1;
                 continue;
             }
-            match super::refresh::refresh_auth_blob(&b.ide, &b.auth_blob) {
+            match super::refresh::refresh_auth_blob(&b.ide, b) {
                 Ok(nb) => {
                     b.auth_blob = nb;
                     b.refresh_error = None;

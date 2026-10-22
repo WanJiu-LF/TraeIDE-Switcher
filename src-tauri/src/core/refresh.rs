@@ -1,6 +1,7 @@
 // ExchangeToken 续期：以 refreshToken 换新 token（DeviceProof = ECDSA P-256(SHA256) 签名）
 // 规格来源：main.js E_e()/j()/exchangeTokenByRefreshToken() 实测提取
 use super::bytecrypto;
+use super::model::AccountBundle;
 use super::paths::{IdeKind, IdePaths};
 use super::quota::api_host;
 use super::store::{StorageJson, TinyStorage};
@@ -85,7 +86,7 @@ struct ExchangeRequest {
     #[serde(rename = "RefreshToken")]
     refresh_token: String,
     #[serde(rename = "DeviceInfo")]
-    device_info: DeviceInfo,
+    device_info: Value,
     #[serde(rename = "DeviceProof")]
     device_proof: DeviceProof,
     #[serde(rename = "IDEVersion")]
@@ -193,12 +194,48 @@ pub(crate) fn client_version(ide: &IdeKind) -> String {
 }
 
 /// 用 refreshToken 换新 token，返回更新后的 auth blob（加密串）
-/// 同机共享身份：用本机 aha 真实设备密钥对签名（换设备会 20403 Token device not match）
-pub fn refresh_auth_blob(ide: &IdeKind, auth_blob_b64: &str) -> Result<String, RefreshError> {
+/// 账号自带设备身份（优先）→ 本机实时身份（存量账号兜底）。
+/// 自带身份让非当前账号/跨机导入账号也能用同一把私钥签 DeviceProof，避免 20403。
+fn bundle_identity(
+    ide: &IdeKind,
+    bundle: &AccountBundle,
+) -> Result<(String, String, String, String), RefreshError> {
+    if let Some(device_id) = super::switch::device_id_str_of(bundle) {
+        let key = format!("{}{}", super::switch::ECDSA_PREFIX, device_id);
+        if let Some(blob) = bundle.ecdsa_blobs.get(&key) {
+            let plain = bytecrypto::decrypt_string(blob)
+                .map_err(|e| RefreshError::Sign(e.to_string()))?;
+            let kp: Value = serde_json::from_str(&plain)
+                .map_err(|e| RefreshError::Response(e.to_string()))?;
+            let private_pem = kp
+                .get("privateKeyPEM")
+                .and_then(|v| v.as_str())
+                .ok_or(RefreshError::Missing("privateKeyPEM"))?
+                .to_string();
+            let public_pem = kp
+                .get("publicKeyPEM")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let machine_id = bundle
+                .machine_id
+                .clone()
+                .or_else(|| StorageJson::load(&IdePaths::detect(*ide)?).ok()
+                    .and_then(|sj| sj.get("telemetry.machineId").and_then(|v| v.as_str()).map(String::from)))
+                .unwrap_or_default();
+            return Ok((device_id, machine_id, private_pem, public_pem));
+        }
+    }
+    device_identity(ide)
+}
+
+/// 续期：优先用账号包内的设备密钥与 DeviceInfo 重放（跨机/非当前账号可用），
+/// 包内缺设备物料时回落到本机实时身份（存量账号行为不变）。
+pub fn refresh_auth_blob(ide: &IdeKind, bundle: &AccountBundle) -> Result<String, RefreshError> {
     // 原始 JSON 层读写：经 AuthInfo 结构体重建会丢弃未建模字段（host / tokenReleaseAt /
     // account 的 storeRegion、avatar_url 等），续期一次就把完整凭据降级成残缺形态。
     // 这里只改 token 相关键，其余原样保留。
-    let plain = bytecrypto::decrypt_string(auth_blob_b64)
+    let plain = bytecrypto::decrypt_string(&bundle.auth_blob)
         .map_err(|e| RefreshError::Response(e.to_string()))?;
     let mut raw: Value =
         serde_json::from_str(&plain).map_err(|e| RefreshError::Response(e.to_string()))?;
@@ -212,21 +249,33 @@ pub fn refresh_auth_blob(ide: &IdeKind, auth_blob_b64: &str) -> Result<String, R
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let (device_id, machine_id, private_pem, public_pem) = device_identity(ide)?;
+    let (device_id, machine_id, private_pem, public_pem) = bundle_identity(ide, bundle)?;
 
-    let device_info = DeviceInfo {
-        device_id,
-        machine_id,
-        platform_code: PLATFORM_CODE,
-        device_type: "PC",
-        device_name: format!("{}的电脑", env_or("USERNAME", "PC")),
-        device_model: String::new(),
-        device_brand: String::new(),
-        device_cpu: env_or("PROCESSOR_IDENTIFIER", ""),
-        os_info: "windows",
-        os_version: "Windows 11".to_string(),
-        client_version: client_version(ide).to_string(),
-        device_public_key: public_pem,
+    // 签发时的 DeviceInfo 原样重放；缺失时才按 bundle/本机身份重建
+    let device_info = match bundle.device_info.clone() {
+        Some(mut v) => {
+            if let Some(obj) = v.as_object_mut() {
+                if !public_pem.is_empty() {
+                    obj.insert("DevicePublicKey".into(), json!(public_pem));
+                }
+            }
+            v
+        }
+        None => serde_json::to_value(DeviceInfo {
+            device_id,
+            machine_id,
+            platform_code: PLATFORM_CODE,
+            device_type: "PC",
+            device_name: format!("{}的电脑", env_or("USERNAME", "PC")),
+            device_model: String::new(),
+            device_brand: String::new(),
+            device_cpu: env_or("PROCESSOR_IDENTIFIER", ""),
+            os_info: "windows",
+            os_version: "Windows 11".to_string(),
+            client_version: client_version(ide).to_string(),
+            device_public_key: public_pem,
+        })
+        .map_err(|e| RefreshError::Response(e.to_string()))?,
     };
     let proof = sign_proof(&private_pem, &old_refresh)?;
     let body = ExchangeRequest {
