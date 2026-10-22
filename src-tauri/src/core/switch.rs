@@ -421,24 +421,34 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
         super::logger::Source::Switch,
         format!("无感换号到 {}（{channel}）", bundle.name),
     );
-    // 切号成功后把归档的旧账号会话导入新账号自己的 project（后台执行，不阻塞换号返回）
-    if archived.is_some() {
-        let kind = *ide;
-        let target = bundle.user_id.clone();
-        std::thread::spawn(move || match super::chat_history::import_pending(kind, &target) {
-            Ok(n) if n > 0 => super::logger::log(
-                super::logger::Level::Info,
-                super::logger::Source::Switch,
-                format!("已向新账号导入 {n} 条历史会话"),
-            ),
-            Ok(_) => {}
-            Err(e) => super::logger::log(
-                super::logger::Level::Warn,
-                super::logger::Source::Switch,
-                format!("历史会话导入未完成：{e}"),
-            ),
+    // 切号后：先导入归档会话，再重载窗口。
+    // 渲染层仍持有旧账号的 project/会话缓存，不重载时 send_message 会带旧 project_id → 992500「项目不存在」；
+    // 重载后 initChatView 会用新账号重新建 project。
+    let target = bundle.user_id.clone();
+    std::thread::spawn(move || {
+        if archived.is_some() {
+            match super::chat_history::import_pending(kind, &target) {
+                Ok(n) if n > 0 => super::logger::log(
+                    super::logger::Level::Info,
+                    super::logger::Source::Switch,
+                    format!("已向新账号导入 {n} 条历史会话"),
+                ),
+                Ok(_) => {}
+                Err(e) => super::logger::log(
+                    super::logger::Level::Warn,
+                    super::logger::Source::Switch,
+                    format!("历史会话导入未完成：{e}"),
+                ),
+            }
+        }
+        let payload = json!({
+            "action": "invoke",
+            "command": "workbench.action.reloadWindow",
+            "args": [],
+            "timeout_ms": 3000,
         });
-    }
+        let _ = super::shim::request_hot_swap(kind, &payload, 5_000);
+    });
     let mut msg: String = match channel {
         "shim" => "无感换号完成（切换助手通道，无需重启）".into(),
         _ if r.get("deviceUpdated").and_then(|v| v.as_bool()) == Some(true) => {
@@ -449,6 +459,7 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
     if let Some(n) = archived {
         msg.push_str(&format!("，已归档 {n} 条会话"));
     }
+    msg.push_str("，Trae 窗口将自动刷新");
     Ok(msg)
 }
 
