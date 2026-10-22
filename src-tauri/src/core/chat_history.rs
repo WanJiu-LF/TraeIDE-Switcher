@@ -123,8 +123,9 @@ fn find_project_by_folder(list: &Value, folder: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// 会话最后一个「已完成」消息 id（fork 不能落在 in_progress 回合上）
-fn last_completed_message(kind: IdeKind, session_id: &str, project_id: &str) -> Result<String, String> {
+/// fork 落点候选（最多 3 个，最新优先）：
+/// fork 不能落在进行中的回合，优先取最后一条已完成的助手消息；失败时可退回更早的候选。
+fn fork_points(kind: IdeKind, session_id: &str, project_id: &str) -> Result<Vec<String>, String> {
     let v = rpc(
         kind,
         "chat",
@@ -137,17 +138,44 @@ fn last_completed_message(kind: IdeKind, session_id: &str, project_id: &str) -> 
         .and_then(|a| a.as_array())
         .cloned()
         .unwrap_or_default();
-    arr.iter()
-        .rev()
-        .find(|m| {
-            m.get("status").and_then(|s| s.as_str()) != Some("in_progress")
-                && m.get("status").and_then(|s| s.as_str()) != Some("ai-generate-ing")
-        })
-        .and_then(|m| m.get("message_id"))
-        .and_then(|id| id.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .ok_or_else(|| "没有已完成的回合".to_string())
+    let done = |m: &Value| {
+        let s = m.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        s != "in_progress" && s != "ai-generate-ing"
+    };
+    let id_of = |m: &Value| {
+        m.get("message_id")
+            .and_then(|id| id.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let mut out: Vec<String> = Vec::new();
+    // 第一优先：最后一条已完成的助手消息
+    for m in arr.iter().rev() {
+        if m.get("role").and_then(|r| r.as_str()) == Some("assistant") && done(m) {
+            if let Some(id) = id_of(m) {
+                out.push(id);
+                break;
+            }
+        }
+    }
+    // 其余候选：任意已完成消息（去重）
+    for m in arr.iter().rev() {
+        if out.len() >= 3 {
+            break;
+        }
+        if !done(m) {
+            continue;
+        }
+        if let Some(id) = id_of(m) {
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err("没有已完成的回合".into());
+    }
+    Ok(out)
 }
 
 fn load_root(path: &std::path::Path) -> Value {
@@ -207,7 +235,7 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
             if sid.is_empty() {
                 continue;
             }
-            let Ok(message_id) = last_completed_message(kind, sid, &project_id) else {
+            let Ok(points) = fork_points(kind, sid, &project_id) else {
                 continue;
             };
             sessions.push(json!({
@@ -215,7 +243,7 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
                 "title": s.get("name").and_then(|x| x.as_str()).unwrap_or(""),
                 "created_at": s.get("created_at").and_then(|x| x.as_i64()).unwrap_or(0),
                 "updated_at": s.get("update_at").and_then(|x| x.as_i64()).unwrap_or(0),
-                "last_message_id": message_id,
+                "message_ids": points,
             }));
         }
         offset += arr.len() as i64;
@@ -347,42 +375,60 @@ pub fn import_pending(kind: IdeKind, target_uid: &str) -> Result<usize, String> 
         for (src_uid, sessions) in snapshot {
             for s in sessions {
                 let sid = s.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
-                let mid = s.get("last_message_id").and_then(|x| x.as_str()).unwrap_or("");
-                if sid.is_empty() || mid.is_empty() || already_imported(&root, &src_uid, target_uid, sid) {
+                if sid.is_empty() || already_imported(&root, &src_uid, target_uid, sid) {
                     continue;
                 }
-                let resp = rpc(
-                    kind,
-                    "lite",
-                    "fork_session",
-                    json!({ "session_id": sid, "message_id": mid, "project_id": pid }),
-                    60_000,
-                );
-                let new_sid = match resp {
-                    Ok(v) if v.get("code").and_then(|c| c.as_i64()) == Some(0) => v
-                        .pointer("/data/new_session_id")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    Ok(v) => {
-                        let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("未知错误");
-                        super::logger::log(
-                            super::logger::Level::Warn,
-                            super::logger::Source::Switch,
-                            format!("会话复制失败（{sid}）：{msg}"),
-                        );
-                        continue;
+                let mut candidates: Vec<String> = s
+                    .get("message_ids")
+                    .and_then(|a| a.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                if candidates.is_empty() {
+                    if let Some(mid) = s.get("last_message_id").and_then(|x| x.as_str()) {
+                        candidates.push(mid.to_string());
                     }
-                    Err(e) => {
-                        super::logger::log(
-                            super::logger::Level::Warn,
-                            super::logger::Source::Switch,
-                            format!("会话复制失败（{sid}）：{e}"),
-                        );
-                        continue;
+                }
+                if candidates.is_empty() {
+                    continue;
+                }
+                let mut new_sid = String::new();
+                let mut last_err = String::new();
+                for mid in candidates {
+                    let resp = rpc(
+                        kind,
+                        "lite",
+                        "fork_session",
+                        json!({ "session_id": sid, "message_id": mid, "project_id": pid }),
+                        60_000,
+                    );
+                    match resp {
+                        Ok(v) if v.get("code").and_then(|c| c.as_i64()) == Some(0) => {
+                            let id = v
+                                .pointer("/data/new_session_id")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("");
+                            if !id.is_empty() {
+                                new_sid = id.to_string();
+                                break;
+                            }
+                            last_err = "返回缺少 new_session_id".into();
+                        }
+                        Ok(v) => {
+                            last_err = v
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("未知错误")
+                                .to_string();
+                        }
+                        Err(e) => last_err = e,
                     }
-                };
+                }
                 if new_sid.is_empty() {
+                    super::logger::log(
+                        super::logger::Level::Warn,
+                        super::logger::Source::Switch,
+                        format!("会话复制失败（{sid}）：{last_err}"),
+                    );
                     continue;
                 }
                 let done = &mut root["accounts"][src_uid.as_str()]["forks"][target_uid];
