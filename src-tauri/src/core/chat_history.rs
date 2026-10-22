@@ -10,7 +10,9 @@ use std::time::Instant;
 const OUTER_PAD_MS: u64 = 15_000;
 const EXPORT_BUDGET_MS: u128 = 60_000;
 const MAX_SESSIONS: usize = 20;
-const MAX_PAGES: usize = 2;
+/// 只取一页：服务端 page_token 语义是游标偏移而非消息序号，翻页会重叠；
+/// 单页返回的是最近 N 条消息，已覆盖最新上下文
+const MAX_PAGES: usize = 1;
 const PAGE_SIZE: i64 = 100;
 const SESSION_LIST_LIMIT: i64 = 50;
 /// 单会话原始消息落档上限（含计划项/工具卡片）
@@ -151,6 +153,33 @@ fn extract_text(content: Option<&Value>) -> String {
     }
 }
 
+/// agent 会话的助手正文不在 content 里，而在 plan_item.tool_call_info(finish).params.summary
+fn extract_task_summary(content: Option<&Value>) -> String {
+    let Some(items) = content
+        .and_then(|c| c.get("messages"))
+        .and_then(|m| m.as_array())
+    else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    for im in items {
+        let Some(pi) = im.get("plan_item") else { continue };
+        if pi.pointer("/tool_call_info/name").and_then(|n| n.as_str()) != Some("finish") {
+            continue;
+        }
+        if let Some(s) = pi
+            .pointer("/tool_call_info/params/summary")
+            .and_then(|s| s.as_str())
+        {
+            let s = s.trim();
+            if !s.is_empty() {
+                parts.push(s.to_string());
+            }
+        }
+    }
+    parts.join("\n\n")
+}
+
 /// 会话消息（分页拉取）：返回 (可导入的文本消息, 原始消息)。
 /// 原始消息含 task/plan_item/工具卡片，完整落档；文本消息用于 chat_migrate。
 fn fetch_messages(
@@ -185,7 +214,10 @@ fn fetch_messages(
             if !matches!(role, "user" | "assistant" | "system") {
                 continue;
             }
-            let text = extract_text(m.get("content"));
+            let mut text = extract_text(m.get("content"));
+            if text.is_empty() && role == "assistant" {
+                text = extract_task_summary(m.get("content"));
+            }
             if !text.is_empty() {
                 out.push(json!({ "role": role, "content": text }));
             }
