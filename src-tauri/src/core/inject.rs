@@ -604,7 +604,7 @@ let c=globalThis.__tsw_ai;
 if(!c){for(let __i=0;__i<24&&!c;__i++){await new Promise(__r=>setTimeout(__r,250));c=globalThis.__tsw_ai;}}
 if(!c)return{ok:false,error:"agent RPC 客户端未就绪（请先在 Trae 内打开一次 AI 侧栏或发起一次对话）"};
 const ctx=p.context&&typeof p.context==="object"?p.context:{};
-if(!ctx.project_id){try{const __v=localStorage.getItem("__tsw_project_id");if(__v)ctx.project_id=__v;}catch(__e){}}
+if(!ctx.project_id&&p.data&&typeof p.data.project_id==="string")ctx.project_id=p.data.project_id;
 const resp=await c.request({service:p.service,method:p.method,data:p.data||{},context:ctx});
 let json;try{json=JSON.stringify(resp);}catch(__e){json=String(resp);}
 return{ok:true,json:json};
