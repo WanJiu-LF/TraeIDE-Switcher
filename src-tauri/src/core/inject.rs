@@ -262,68 +262,32 @@ return{success:true,deviceUpdated:deviceUpdated,diag:_diag};
 }
 "#;
 
-// ════════════════ 会话/任务记录归属补丁（对话记录随号保留）════════════════
+// ════════════════ 会话/任务记录归属（已移除 project_id 固定补丁）════════════════
 //
-// 根因（真机取证 CN 3.3.100）：
-//   AI 会话与任务列表按 (user_id, project_id) 归属。project_id 由 ai-modules-chat 的
-//   createProject 取得后写进 project store（renderer.log 实测：每个账号各自持有一个
-//   project_id，跨重启复用，如 498492885962313→6acf2a58…、1910309375982379→6ad169ff…）。
-//   切号后客户端用自己的 project 查询会话列表 → 上一个账号的对话记录不可见。
-// 修法：把 project_id 固定成一个共享值（localStorage 持久化，首次运行即固化），
-//   所有账号落进同一 project，切号前后对话记录并存；首次运行取到的仍是本账号原值，
-//   因此现有对话不会丢。
-//   ⑦ workbench：client_info.project_id（所有请求的 project 出口）
-//   ⑧ ai-modules-chat：project store 的 setProjectId（会话查询真正的取值处）
+// Trae 的 project 由服务端按账号创建并归属，客户端 createProject 拿到的 project_id
+// 只对当前账号有效。旧版为了跨号保留对话记录，把 project_id 固定成 localStorage 的
+// 共享值（workbench 的 client_info.project_id + ai-modules-chat 的 setProjectId）。
+// 换号后新账号并不拥有该 project，服务端返回 project_not_found（UI「项目不存在」）。
+//
+// 现改为移除固定表达式，恢复原生按账号隔离：每个账号使用自己 createProject 得到的
+// project_id。下面的 unpin_pid_expr 负责把旧安装里已经写入的固定表达式还原。
 pub const TSW_PID_FLAG: &str = "__TSW_PID__";
 
-const PID_PIN_TMPL: &str = r#"(function(_v){/*__TSW_PID__*/var _p=globalThis.__tsw_pid;if(typeof _p==="undefined"){_p=null;try{var _ls=typeof localStorage!=="undefined"?localStorage:null;if(_ls){_p=_ls.getItem("__tsw_project_id")||null;}}catch(_){}}if(_p&&/^[0-9a-f]{24}$/.test(_p))return _p;if(typeof _v==="string"&&/^[0-9a-f]{24}$/.test(_v)){globalThis.__tsw_pid=_v;try{var _l2=typeof localStorage!=="undefined"?localStorage:null;if(_l2)_l2.setItem("__tsw_project_id",_v);}catch(_){}}return _v;})(__ARG__)"#;
-
-fn pid_pin(arg: &str) -> String {
-    PID_PIN_TMPL.replace("__ARG__", arg)
-}
-
-/// ⑦ workbench：`project_id:e.context?.project_id` → 固定值表达式
-fn patch_pid_workbench(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_PID_FLAG) {
-        return Ok(false);
+/// 把旧版 `(function(_v){/*__TSW_PID__*/...})(ARG)` 还原为 `ARG`。
+/// 返回是否发生了替换；幂等，可对 workbench / ai-modules-chat 反复调用。
+fn unpin_pid_expr(src: &mut String) -> bool {
+    let prefix = "(function(_v){/*__TSW_PID__*/";
+    let mut changed = false;
+    while let Some(start) = src.find(prefix) {
+        let Some(call_rel) = src[start..].find("})(") else { break };
+        let call_at = start + call_rel + 3;
+        let Some(end_rel) = src[call_at..].find(')') else { break };
+        let arg = src[call_at..call_at + end_rel].to_string();
+        let end = call_at + end_rel + 1;
+        src.replace_range(start..end, &arg);
+        changed = true;
     }
-    let needle = "project_id:e.context?.project_id";
-    let pos = src.find(needle).ok_or("特征锚未命中：client_info.project_id")?;
-    let arg = "e.context?.project_id";
-    let at = pos + "project_id:".len();
-    let pinned = pid_pin(arg);
-    src.replace_range(at..at + arg.len(), &pinned);
-    Ok(true)
-}
-
-/// ⑧ ai-modules-chat：`_projectStore.actions.setProjectId(<o>.project_id,<o>.real_project_id)`
-fn patch_pid_chat(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_PID_FLAG) {
-        return Ok(false);
-    }
-    let needle = "_projectStore.actions.setProjectId(";
-    let pos = src.find(needle).ok_or("特征锚未命中：project store setProjectId")?;
-    let args_at = pos + needle.len();
-    let close = src[args_at..].find(')').ok_or("setProjectId 参数未闭合")?;
-    let args = src[args_at..args_at + close].to_string();
-    let parts: Vec<&str> = args.split(',').collect();
-    if parts.len() != 2 {
-        return Err("setProjectId 参数数量异常".into());
-    }
-    let obj = parts[0]
-        .strip_suffix(".project_id")
-        .filter(|o| !o.is_empty() && o.bytes().all(is_ident_byte))
-        .ok_or("setProjectId 首参形态异常")?;
-    if parts[1].trim() != format!("{obj}.real_project_id") {
-        return Err("setProjectId 次参形态异常".into());
-    }
-    let replacement = format!(
-        "{},{}",
-        pid_pin(&format!("{obj}.project_id")),
-        pid_pin(&format!("{obj}.real_project_id"))
-    );
-    src.replace_range(args_at..args_at + close, &replacement);
-    Ok(true)
+    changed
 }
 
 fn ensure_bak_named(file: &std::path::Path) -> io::Result<()> {
@@ -335,7 +299,7 @@ fn ensure_bak_named(file: &std::path::Path) -> io::Result<()> {
     Ok(())
 }
 
-/// 会话归属补丁（ai-modules-chat：project store 固定）
+/// 会话归属迁移（ai-modules-chat：移除旧版 project_id 固定，恢复按账号隔离）
 pub fn patch_chat(paths: &IdePaths) -> io::Result<InjectStatus> {
     patch_chat_file(&paths.chat_module_js())
 }
@@ -345,11 +309,10 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
         return Err(io::Error::new(io::ErrorKind::NotFound, "未找到 ai-modules-chat 模块"));
     }
     let mut src = std::fs::read_to_string(chat)?;
-    if src.contains(TSW_PID_FLAG) {
+    if !unpin_pid_expr(&mut src) {
         return Ok(InjectStatus::AlreadyPatched);
     }
     ensure_bak_named(chat)?;
-    patch_pid_chat(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     std::fs::write(chat, src)?;
     Ok(InjectStatus::Patched)
 }
@@ -522,12 +485,13 @@ pub fn patch_workbench(paths: &IdePaths) -> io::Result<InjectStatus> {
 
 pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
     let mut src = std::fs::read_to_string(wb)?;
+    // 旧安装可能带 project_id 固定表达式：先还原，再判断其余补丁
+    let unpinned = unpin_pid_expr(&mut src);
     let already_cmd = src.contains(TSW_CMD_FLAG);
     let already_ret = src.contains(TSW_WRET_FLAG);
-    let already_pid = src.contains(TSW_PID_FLAG);
     let already_aic = src.contains(TSW_AIC_FLAG);
     let already_rpc = src.contains(TSW_RPC_FLAG);
-    if already_cmd && already_ret && already_pid && already_aic && already_rpc {
+    if already_cmd && already_ret && already_aic && already_rpc && !unpinned {
         return Ok(InjectStatus::AlreadyPatched);
     }
     ensure_bak(wb)?;
@@ -539,11 +503,6 @@ pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
     }
     if !already_ret {
         if let Err(e) = patch_refresh_return(&mut src) {
-            errs.push(e);
-        }
-    }
-    if !already_pid {
-        if let Err(e) = patch_pid_workbench(&mut src) {
             errs.push(e);
         }
     }
@@ -766,7 +725,7 @@ fn file_mtime_ms(p: &std::path::Path) -> Option<u64> {
         .map(|d| d.as_millis() as u64)
 }
 
-/// (TSW 六补丁是否齐全, 会话归属补丁是否落盘, 补丁落盘时刻)
+/// (TSW 六补丁是否齐全, 旧 project_id 固定补丁是否仍在, 补丁落盘时刻)
 fn patch_state(paths: &IdePaths) -> (bool, bool, u64) {
     let key = paths.install_dir.to_string_lossy().to_string();
     let main_m = file_mtime_ms(&paths.main_js()).unwrap_or(0);
@@ -803,7 +762,7 @@ fn scan_tsw_patched(paths: &IdePaths) -> bool {
             .unwrap_or(false)
 }
 
-/// 会话/任务记录归属补丁是否落盘（workbench + ai-modules-chat 双处）
+/// 旧版 project_id 固定补丁是否仍在（workbench + ai-modules-chat 双处）
 fn scan_chat_pinned(paths: &IdePaths) -> bool {
     let wb = std::fs::read_to_string(paths.workbench_js())
         .map(|s| s.contains(TSW_PID_FLAG))
@@ -811,10 +770,11 @@ fn scan_chat_pinned(paths: &IdePaths) -> bool {
     let chat = std::fs::read_to_string(paths.chat_module_js())
         .map(|s| s.contains(TSW_PID_FLAG))
         .unwrap_or(false);
-    wb && chat
+    // 任一处仍有固定表达式都可能导致换号后 project_not_found
+    wb || chat
 }
 
-/// 会话归属补丁状态（GUI 展示用）
+/// 旧版 project_id 固定补丁是否仍在（GUI 展示用）
 pub fn is_chat_pinned(paths: &IdePaths) -> bool {
     patch_state(paths).1
 }
@@ -830,21 +790,21 @@ pub fn is_tsw_patched(paths: &IdePaths) -> bool {
     patch_state(paths).0
 }
 
-/// 一次打齐 CDP 桥 + main 三补丁 + workbench 四补丁 + 聊天模块会话归属补丁
+/// 一次打齐 CDP 桥 + main 三补丁 + workbench 四补丁，并迁移旧 project_id 固定补丁
 pub fn patch_all(paths: &IdePaths) -> io::Result<String> {
     patch(paths)?;
     patch_main(paths)?;
     patch_workbench(paths)?;
-    // 会话归属补丁独立于热换号链路：失败只降级（新版本结构变动时不影响免重启换号）
+    // 迁移独立于热换号链路：失败只降级（旧固定仍在时换号后会报「项目不存在」）
     let chat_note = match patch_chat(paths) {
-        Ok(_) => "会话记录归属",
+        Ok(_) => "会话按账号隔离",
         Err(e) => {
             crate::core::logger::log(
                 crate::core::logger::Level::Warn,
                 crate::core::logger::Source::System,
-                format!("会话记录归属未生效（对话记录跨号保留不可用）: {e}"),
+                format!("会话归属迁移未生效（旧 project_id 固定可能仍在，换号后会报项目不存在）: {e}"),
             );
-            "会话记录归属失败（见日志）"
+            "会话归属迁移失败（见日志）"
         }
     };
     Ok(format!("无感换号支持安装完成：__sw 桥 + 无感换号 handler + workbench 命令 + {chat_note}"))

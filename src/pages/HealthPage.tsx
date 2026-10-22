@@ -153,10 +153,10 @@ export function HealthPage({
           }
         />
         <Row
-          title="会话按账号归类"
-          desc="聊天记录与任务按账号分别归类；未安装时换号后会话记录会互相混淆"
-          state={status?.chatPinned ? "ok" : "warn"}
-          text={status?.chatPinned ? "已安装" : "未安装"}
+          title="会话归属"
+          desc="Trae 原生按账号隔离 project；换号后只显示当前账号的会话。旧版共享 project_id 会报「项目不存在」，需重装无感换号支持完成迁移"
+          state={status?.chatPinned ? "warn" : "ok"}
+          text={status?.chatPinned ? "需迁移" : "按账号隔离"}
         />
         <Row
           title="切换助手（无感换号通道）"

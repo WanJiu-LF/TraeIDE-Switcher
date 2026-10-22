@@ -422,7 +422,7 @@ export default function App() {
   // 会话补丁未加载时不发请求，避免未就绪时反复失败刷日志；手动路径（notify）无条件执行并弹错误。
   const ideReadyRef = useRef(false);
   useEffect(() => {
-    ideReadyRef.current = !!(ideStatus?.running && ideStatus?.chatPinned);
+    ideReadyRef.current = !!(ideStatus?.running && ideStatus?.tswPatched);
   }, [ideStatus]);
 
   // 版本号只从打包时注入的 tauri 版本读取，避免多处硬编码导致升级后显示不一致
