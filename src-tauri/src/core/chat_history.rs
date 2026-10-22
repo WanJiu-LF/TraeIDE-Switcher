@@ -1,4 +1,4 @@
-﻿// 跨账号会话保留：切号前记录旧账号会话与最后一个已完成消息，切号后用 `fork_session`
+// 跨账号会话保留：切号前记录旧账号会话与最后一个已完成消息，切号后用 `fork_session`
 // 在新账号自己的 project 里复制整段会话。
 // 服务端 `fork_session` 是完整复制（含 task/plan_item/工具卡片），副本属于新账号，可直接继续对话；
 // 旧的 chat_migrate 只收纯文本，agent 会话会丢正文，已弃用。
@@ -178,6 +178,26 @@ fn fork_points(kind: IdeKind, session_id: &str, project_id: &str) -> Result<Vec<
     Ok(out)
 }
 
+/// 进行中的会话先 stop 让当前回合落库，再取 fork 点（切换账号后这一轮无法续写，但已生成内容保留）
+fn fork_points_after_stop(
+    kind: IdeKind,
+    session_id: &str,
+    project_id: &str,
+    meta: &Value,
+) -> Result<Vec<String>, String> {
+    if meta.get("session_status").and_then(|s| s.as_str()) == Some("in_progress") {
+        let _ = rpc(
+            kind,
+            "chat",
+            "stop_chat",
+            json!({ "session_id": session_id }),
+            20_000,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    }
+    fork_points(kind, session_id, project_id)
+}
+
 fn load_root(path: &std::path::Path) -> Value {
     std::fs::read(path)
         .ok()
@@ -235,7 +255,7 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
             if sid.is_empty() {
                 continue;
             }
-            let Ok(points) = fork_points(kind, sid, &project_id) else {
+            let Ok(points) = fork_points_after_stop(kind, sid, &project_id, s) else {
                 continue;
             };
             sessions.push(json!({
@@ -430,6 +450,27 @@ pub fn import_pending(kind: IdeKind, target_uid: &str) -> Result<usize, String> 
                         format!("会话复制失败（{sid}）：{last_err}"),
                     );
                     continue;
+                }
+                // 副本标题会被服务端加上「(2) 」，改回原标题，切换后列表看起来与原会话一致
+                let title = s.get("title").and_then(|x| x.as_str()).unwrap_or("");
+                if !title.is_empty() {
+                    let ok = |v: &Value| v.get("code").and_then(|c| c.as_i64()) == Some(0);
+                    let renamed = rpc(
+                        kind,
+                        "lite",
+                        "rename_chat_session",
+                        json!({ "chat_session_id": new_sid, "title": title }),
+                        20_000,
+                    );
+                    if !renamed.as_ref().map(ok).unwrap_or(false) {
+                        let _ = rpc(
+                            kind,
+                            "lite",
+                            "rename_chat_session",
+                            json!({ "session_id": new_sid, "title": title }),
+                            20_000,
+                        );
+                    }
                 }
                 let done = &mut root["accounts"][src_uid.as_str()]["forks"][target_uid];
                 if !done.is_array() {
