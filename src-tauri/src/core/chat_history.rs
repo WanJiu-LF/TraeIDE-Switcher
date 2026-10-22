@@ -13,6 +13,8 @@ const MAX_SESSIONS: usize = 20;
 const MAX_PAGES: usize = 2;
 const PAGE_SIZE: i64 = 100;
 const SESSION_LIST_LIMIT: i64 = 50;
+/// 单会话原始消息落档上限（含计划项/工具卡片）
+const MAX_RAW_BYTES: usize = 2_000_000;
 
 fn ide_tag(ide: IdeKind) -> &'static str {
     match ide {
@@ -149,9 +151,16 @@ fn extract_text(content: Option<&Value>) -> String {
     }
 }
 
-/// 会话文本消息（分页拉取；task/plan_item 无纯文本正文，归入本地归档但不参与导入）
-fn fetch_text_messages(kind: IdeKind, session_id: &str, project_id: &str) -> Result<Vec<Value>, String> {
+/// 会话消息（分页拉取）：返回 (可导入的文本消息, 原始消息)。
+/// 原始消息含 task/plan_item/工具卡片，完整落档；文本消息用于 chat_migrate。
+fn fetch_messages(
+    kind: IdeKind,
+    session_id: &str,
+    project_id: &str,
+) -> Result<(Vec<Value>, Vec<Value>), String> {
     let mut out = Vec::new();
+    let mut raw = Vec::new();
+    let mut raw_bytes = 0usize;
     let mut token = String::new();
     for _ in 0..MAX_PAGES {
         let mut data = json!({
@@ -177,10 +186,13 @@ fn fetch_text_messages(kind: IdeKind, session_id: &str, project_id: &str) -> Res
                 continue;
             }
             let text = extract_text(m.get("content"));
-            if text.is_empty() {
-                continue;
+            if !text.is_empty() {
+                out.push(json!({ "role": role, "content": text }));
             }
-            out.push(json!({ "role": role, "content": text }));
+            if raw_bytes < MAX_RAW_BYTES {
+                raw_bytes += serde_json::to_string(&m).map(|s| s.len()).unwrap_or(0);
+                raw.push(m);
+            }
         }
         token = v
             .pointer("/data/next_page_token")
@@ -191,7 +203,7 @@ fn fetch_text_messages(kind: IdeKind, session_id: &str, project_id: &str) -> Res
             break;
         }
     }
-    Ok(out)
+    Ok((out, raw))
 }
 
 fn load_root(path: &std::path::Path) -> Value {
@@ -251,8 +263,8 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
             if sid.is_empty() {
                 continue;
             }
-            let messages = fetch_text_messages(kind, sid, &project_id)?;
-            if messages.is_empty() {
+            let (messages, raw) = fetch_messages(kind, sid, &project_id)?;
+            if messages.is_empty() && raw.is_empty() {
                 continue;
             }
             sessions.push(json!({
@@ -261,6 +273,7 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
                 "created_at": s.get("created_at").and_then(|x| x.as_i64()).unwrap_or(0),
                 "updated_at": s.get("update_at").and_then(|x| x.as_i64()).unwrap_or(0),
                 "messages": messages,
+                "raw": raw,
             }));
         }
         offset += arr.len() as i64;
