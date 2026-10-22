@@ -1,4 +1,4 @@
-// 跨账号会话保留：切号前记录旧账号会话与最后一个已完成消息，切号后用 `fork_session`
+﻿// 跨账号会话保留：切号前记录旧账号会话与最后一个已完成消息，切号后用 `fork_session`
 // 在新账号自己的 project 里复制整段会话。
 // 服务端 `fork_session` 是完整复制（含 task/plan_item/工具卡片），副本属于新账号，可直接继续对话；
 // 旧的 chat_migrate 只收纯文本，agent 会话会丢正文，已弃用。
@@ -170,6 +170,7 @@ fn save_root(path: &std::path::Path, root: &Value) {
 
 /// 归档当前账号的会话清单（切号前调用；失败只降级，不阻断换号）
 pub fn export(kind: IdeKind) -> Result<usize, String> {
+    let t0 = std::time::Instant::now();
     let (project_id, folder) = current_project(kind)?;
     if folder.is_empty() {
         return Err("当前项目未关联工作区目录".into());
@@ -199,7 +200,7 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
             break;
         }
         for s in &arr {
-            if sessions.len() >= MAX_SESSIONS {
+            if sessions.len() >= MAX_SESSIONS || t0.elapsed().as_millis() > 30_000 {
                 break;
             }
             let sid = s.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
@@ -218,7 +219,10 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
             }));
         }
         offset += arr.len() as i64;
-        if (arr.len() as i64) < SESSION_LIST_LIMIT || sessions.len() >= MAX_SESSIONS {
+        if (arr.len() as i64) < SESSION_LIST_LIMIT
+            || sessions.len() >= MAX_SESSIONS
+            || t0.elapsed().as_millis() > 30_000
+        {
             break;
         }
     }
@@ -246,12 +250,12 @@ pub fn export(kind: IdeKind) -> Result<usize, String> {
         .map(|o| o.entry("accounts").or_insert_with(|| json!({})))
         .and_then(|v| v.as_object_mut())
         .ok_or("归档结构异常")?;
-    let entry = accounts.entry(uid).or_insert_with(|| json!({ "imports": {} }));
+    let entry = accounts.entry(uid).or_insert_with(|| json!({ "forks": {} }));
     entry["source_project_id"] = json!(project_id);
     entry["exported_at"] = json!(super::refresh::now_millis());
     entry["sessions"] = json!(sessions);
-    if entry.get("imports").is_none() {
-        entry["imports"] = json!({});
+    if entry.get("forks").is_none() {
+        entry["forks"] = json!({});
     }
     let n = sessions_len(entry);
     save_root(&path, &root);
@@ -269,7 +273,7 @@ fn current_uid(kind: IdeKind) -> Option<String> {
 }
 
 fn already_imported(root: &Value, src_uid: &str, target_uid: &str, sid: &str) -> bool {
-    root.pointer(&format!("/accounts/{src_uid}/imports/{target_uid}"))
+    root.pointer(&format!("/accounts/{src_uid}/forks/{target_uid}"))
         .and_then(|d| d.as_array())
         .map(|a| a.iter().any(|x| x.as_str() == Some(sid)))
         .unwrap_or(false)
@@ -381,7 +385,7 @@ pub fn import_pending(kind: IdeKind, target_uid: &str) -> Result<usize, String> 
                 if new_sid.is_empty() {
                     continue;
                 }
-                let done = &mut root["accounts"][src_uid.as_str()]["imports"][target_uid];
+                let done = &mut root["accounts"][src_uid.as_str()]["forks"][target_uid];
                 if !done.is_array() {
                     *done = json!([]);
                 }
