@@ -1,4 +1,4 @@
-// 跨账号会话保留：切号前记录旧账号会话与最后一个已完成消息，切号后用 `fork_session`
+﻿// 跨账号会话保留：切号前记录旧账号会话与最后一个已完成消息，切号后用 `fork_session`
 // 在新账号自己的 project 里复制整段会话。
 // 服务端 `fork_session` 是完整复制（含 task/plan_item/工具卡片），副本属于新账号，可直接继续对话；
 // 旧的 chat_migrate 只收纯文本，agent 会话会丢正文，已弃用。
@@ -37,6 +37,17 @@ fn rpc(kind: IdeKind, service: &str, method: &str, data: Value, timeout_ms: u64)
         .and_then(|v| v.as_str())
         .map(|p| json!({ "project_id": p }))
         .unwrap_or_else(|| json!({}));
+    rpc_in(kind, service, method, data, ctx, timeout_ms)
+}
+
+fn rpc_in(
+    kind: IdeKind,
+    service: &str,
+    method: &str,
+    data: Value,
+    ctx: Value,
+    timeout_ms: u64,
+) -> Result<Value, String> {
     let payload = json!({
         "action": "invoke",
         "command": "_tsw.chatRpc",
@@ -452,25 +463,17 @@ pub fn import_pending(kind: IdeKind, target_uid: &str) -> Result<usize, String> 
                     continue;
                 }
                 // 副本标题会被服务端加上「(2) 」，改回原标题，切换后列表看起来与原会话一致
+                // 实测接口：chat.update_session_title {session_id, session_title}
                 let title = s.get("title").and_then(|x| x.as_str()).unwrap_or("");
                 if !title.is_empty() {
-                    let ok = |v: &Value| v.get("code").and_then(|c| c.as_i64()) == Some(0);
-                    let renamed = rpc(
+                    let _ = rpc_in(
                         kind,
-                        "lite",
-                        "rename_chat_session",
-                        json!({ "chat_session_id": new_sid, "title": title }),
+                        "chat",
+                        "update_session_title",
+                        json!({ "session_id": new_sid, "session_title": title }),
+                        json!({ "project_id": pid, "chat_session_id": new_sid }),
                         20_000,
                     );
-                    if !renamed.as_ref().map(ok).unwrap_or(false) {
-                        let _ = rpc(
-                            kind,
-                            "lite",
-                            "rename_chat_session",
-                            json!({ "session_id": new_sid, "title": title }),
-                            20_000,
-                        );
-                    }
                 }
                 let done = &mut root["accounts"][src_uid.as_str()]["forks"][target_uid];
                 if !done.is_array() {
