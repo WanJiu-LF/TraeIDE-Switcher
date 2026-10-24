@@ -1073,7 +1073,51 @@ pub fn patch_all(paths: &IdePaths) -> io::Result<String> {
             "会话记录归属失败（见日志）"
         }
     };
-    Ok(format!("无感换号支持安装完成：__sw 桥 + 无感换号 handler + workbench 命令 + {chat_note}"))
+    // 共享进程守卫：换号热路径的 setI18nApiHostByUserInfo 未捕获异常会打断
+    // ai-agent 服务初始化（服务启动异常），独立降级不影响主链路
+    let sp_note = match paths.main_js().parent().map(|p| {
+        p.join("vs/code/electron-utility/sharedProcess/sharedProcessMain.js")
+    }) {
+        Some(shared_js) => match patch_shared_guard(&shared_js) {
+            Ok(true) => "共享进程守卫",
+            Ok(false) => "共享进程守卫（已装）",
+            Err(e) => {
+                crate::core::logger::log(
+                    crate::core::logger::Level::Warn,
+                    crate::core::logger::Source::System,
+                    format!("共享进程守卫未生效（服务启动异常风险）: {e}"),
+                );
+                "共享进程守卫失败（见日志）"
+            }
+        },
+        None => "共享进程守卫跳过",
+    };
+    Ok(format!("无感换号支持安装完成：__sw 桥 + 无感换号 handler + workbench 命令 + {chat_note} + {sp_note}"))
+}
+
+pub const SPGUARD_MARKER: &str = "/*__SW_SPGUARD__*/";
+/// sharedProcessMain 守卫：换号热路径上 shared process 会调用主进程未注册的
+/// `setI18nApiHostByUserInfo` handler（CodeExpectedError: Method not found），
+/// 该未捕获异常会打断 ai-agent 服务初始化（健康检查超时 →「服务启动异常」）。
+/// 白名单吞掉该已知良性异常，其余异常照常抛出。
+const SPGUARD_TAIL: &str = r#"/*__SW_SPGUARD__*/(function(){try{if(typeof process==="object"&&process&&typeof process.on==="function"&&!process.__swGuard){process.__swGuard=1;process.on("uncaughtException",function(e){try{if(e&&/setI18nApiHostByUserInfo/.test(String((e&&e.message)||e)))return;}catch(_){}throw e;});}}catch(_){}})();"#;
+
+/// 共享进程守卫补丁（幂等；返回是否新装）
+pub fn patch_shared_guard(shared_js: &std::path::Path) -> io::Result<bool> {
+    if !shared_js.exists() {
+        return Ok(false);
+    }
+    let mut src = std::fs::read_to_string(shared_js)?;
+    if src.contains(SPGUARD_MARKER) {
+        return Ok(false);
+    }
+    let bak = shared_js.with_extension("js.switcher.bak");
+    if !bak.exists() {
+        std::fs::copy(shared_js, &bak)?;
+    }
+    src.push_str(SPGUARD_TAIL);
+    std::fs::write(shared_js, &src)?;
+    Ok(true)
 }
 
 /// 全量卸载：优先还原原始备份（干净彻底），无备份则逐段剥离
