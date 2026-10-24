@@ -321,29 +321,93 @@ fn patch_pid_chat(src: &mut String) -> Result<bool, String> {
 }
 
 pub const TSW_SEND_PID_FLAG: &str = "__TSW_SENDPID__";
+const TSW_SEND_PID_V2_FLAG: &str = "__TSW_SENDPID_V2__";
 
-/// 发送请求的项目替换：服务端只校验 project_id 归属、不校验 chat_session_id 归属。
-/// 固定 project_id 时界面仍显示原账号会话；发送时改传当前账号自己的 project_id，
-/// 消息即写回原会话，模型调用按当前账号计费。
+/// 发送请求的项目替换：服务端校验 project_id 归属，不校验 chat_session_id 归属。
+/// 固定 project_id 时界面保留原会话；发送时改传当前账号的工作区 project_id，
+/// 查询或创建失败则阻断发送，绝不回退到旧 project_id。
 const SEND_PID_ANCHOR: &str = "let S=ei(e),k=await this.chatApi.sendMessage(eo(e))";
+const SEND_PID_V2_PREFIX: &str = "let S=ei(e),__tsw_m=eo(e);";
+const SEND_PID_OLD_PREFIX: &str = "let S=ei(e),__tsw_m=eo(e);try{/*";
+const SEND_PID_OLD_CALL: &str = "let k=await this.chatApi.sendMessage(__tsw_m)";
 
-const SEND_PID_CODE: &str = r#"let S=ei(e),__tsw_m=eo(e);try{/*__TSW_SENDPID__*/
-let __tsw_f="";try{const __tsw_s=this.storeService&&this.storeService.getSession?this.storeService.getSession(e.sessionId):null;__tsw_f=(__tsw_s&&__tsw_s.source&&(__tsw_s.source.local_folder||__tsw_s.source.remote_folder))||"";}catch(_e){}
-if(!__tsw_f&&__tsw_m){__tsw_f=(__tsw_m.source&&(__tsw_m.source.local_folder||__tsw_m.source.remote_folder))||__tsw_m.workspace_folder||"";}
-if(__tsw_f&&globalThis.__tsw_ai&&__tsw_m&&typeof __tsw_m==="object"){
-const __tsw_call=(s,m,d)=>globalThis.__tsw_ai.request({service:s,method:m,data:d,context:{}});
-const __tsw_norm=v=>String(v||"").replace(/\//g,"\\").replace(/\\+$/,"").toLowerCase();
-const __tsw_list=await __tsw_call("lite","list_projects_v2",{page_size:100});
-const __tsw_items=(__tsw_list&&__tsw_list.data&&__tsw_list.data.data&&__tsw_list.data.data.items)||(__tsw_list&&__tsw_list.data&&__tsw_list.data.items)||[];
-let __tsw_it=__tsw_items.find(x=>__tsw_norm(x.single_root_workspace_folder)===__tsw_norm(__tsw_f));
-if(!__tsw_it){const __tsw_c=await __tsw_call("lite","get_or_create_project_v2",{name:__tsw_f.split(/[\\\/]/).filter(Boolean).pop()||"workspace",source:"native-ide",project_kind:"workspace",workspace_type:"single_root",single_root_workspace_folder:__tsw_f,workspace_folders:[__tsw_f]});const __tsw_cd=(__tsw_c&&__tsw_c.data&&__tsw_c.data.data)||(__tsw_c&&__tsw_c.data)||{};if(__tsw_cd.project_id)__tsw_it={project_id:__tsw_cd.project_id};}
-if(__tsw_it&&__tsw_it.project_id)__tsw_m.project_id=__tsw_it.project_id;
+const SEND_PID_CODE: &str = r#"let S=ei(e),__tsw_m=eo(e);/*__TSW_SENDPID__*//*__TSW_SENDPID_V2__*/
+if(!__tsw_m||typeof __tsw_m!=="object")throw new Error("发送请求无效，已停止发送");
+if(!globalThis.__tsw_ai||typeof globalThis.__tsw_ai.request!=="function")throw new Error("当前账号项目服务未就绪，已停止发送");
+let __tsw_s=null;try{__tsw_s=this.sessionStore&&this.sessionStore.sessionById&&this.sessionStore.sessionById.get?this.sessionStore.sessionById.get(h):null;}catch(__tsw_e){}
+const __tsw_src=(__tsw_s&&__tsw_s.source)||__tsw_m.source||{};
+const __tsw_f=(__tsw_s&&(__tsw_s.mainFolder||__tsw_s.main_folder))||__tsw_src.local_folder||__tsw_src.remote_folder||(__tsw_s&&__tsw_s.worktreeData&&__tsw_s.worktreeData.worktreePath)||(__tsw_m.workspace_folders&&__tsw_m.workspace_folders[0])||__tsw_m.workspace_folder||"";
+if(!__tsw_f)throw new Error("无法定位会话工作区，已停止发送");
+const __tsw_data={project_kind:"workspace",workspace_type:"single_root",single_root_workspace_folder:__tsw_f,workspace_folders:[__tsw_f]};
+const __tsw_r=await globalThis.__tsw_ai.request({service:"lite",method:"get_or_create_project_v2",data:__tsw_data,context:{}});
+const __tsw_project=(r=>{let x=r;for(let i=0;i<8&&x&&typeof x==="object";i++){if(x.ok===false||x.success===false)throw new Error(x.message||x.error||"项目查询失败");if(x.code!==undefined&&String(x.code)!=="0")throw new Error(x.message||x.msg||"项目查询失败 (code "+x.code+")");if(typeof x.project_id==="string"&&x.project_id)return x;if(typeof x.json==="string"){try{x=JSON.parse(x.json);continue}catch(__e){}}if(x.data!==undefined){x=x.data;continue}break}throw new Error("项目查询响应缺少有效 ID")})(__tsw_r);
+if(typeof __tsw_project.project_id!=="string"||!/^[0-9a-f]{24}$/i.test(__tsw_project.project_id))throw new Error("当前账号项目 ID 无效，已停止发送");
+__tsw_m.project_id=__tsw_project.project_id;
+__tsw_m.project_kind="workspace";
+globalThis.__tsw_ctx_project=__tsw_project.project_id;
+let k=await this.chatApi.sendMessage(__tsw_m)"#;
+
+pub const TSW_SEND_CTX_FLAG: &str = "__TSW_SENDCTX__";
+const SEND_CTX_ANCHOR: &str = r#"async sendMessage(e,t){return this.adapter.invoke({service:"chat",method:"sendMessage",params:e,context:{...this.getContext(),...t&&{_invokeOptions:t}}})}"#;
+const SEND_CTX_CODE: &str = r#"async sendMessage(e,t){/*__TSW_SENDCTX__*/const __tsw_c={...this.getContext(),...e&&e.project_id?{project_id:e.project_id}:{},...t&&{_invokeOptions:t}};return this.adapter.invoke({service:"chat",method:"sendMessage",params:e,context:__tsw_c})}"#;
+
+/// 服务端可能从请求 context 读取 project_id；把发送参数里的项目同步进 context，
+/// 避免只改 data 时仍被旧账号 project 覆盖。
+fn patch_send_context(src: &mut String) -> Result<bool, String> {
+    if src.contains(TSW_SEND_CTX_FLAG) {
+        return Ok(false);
+    }
+    let Some(pos) = src.find(SEND_CTX_ANCHOR) else {
+        return Err("特征锚未命中：chat sendMessage context".into());
+    };
+    src.replace_range(pos..pos + SEND_CTX_ANCHOR.len(), SEND_CTX_CODE);
+    Ok(true)
 }
-}catch(_e){}let k=await this.chatApi.sendMessage(__tsw_m)"#;
+
+const SUB_CTX_FLAG: &str = "__TSW_SUBCTX__";
+const SUB_CTX_OLD: &str = r#"{service:"chat",method:"subscribe",params:{chat_session_id:e,...r},context:this.getContext(),lastEventId:t?.lastEventId}"#;
+const SUB_CTX_NEW: &str = r#"{service:"chat",method:"subscribe",params:{chat_session_id:e,...r},context:{...this.getContext(),...globalThis.__tsw_ctx_project?{project_id:globalThis.__tsw_ctx_project}:{}},lastEventId:t?.lastEventId}/*__TSW_SUBCTX__*/"#;
+
+/// 发送后的事件订阅同样带旧 project context；同步为发送时解析出的当前账号 project。
+fn patch_subscribe_context(src: &mut String) -> Result<bool, String> {
+    if src.contains(SUB_CTX_FLAG) {
+        return Ok(false);
+    }
+    let Some(pos) = src.find(SUB_CTX_OLD) else {
+        return Err("特征锚未命中：chat subscribe context".into());
+    };
+    src.replace_range(pos..pos + SUB_CTX_OLD.len(), SUB_CTX_NEW);
+    Ok(true)
+}
 
 fn patch_send_project(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_SEND_PID_FLAG) {
-        return Ok(false);
+    if let Some(marker) = src.find(TSW_SEND_PID_V2_FLAG) {
+        // v2 之前曾只按 marker 判断幂等，导致已有旧 v2 体不会接收后续修正。
+        // 以唯一发送前缀和 sendMessage 调用界定替换范围；相同内容仍保持幂等。
+        let start = src[..marker]
+            .rfind(SEND_PID_V2_PREFIX)
+            .ok_or("v2 发送补丁起始锚未命中")?;
+        let end = src[marker..]
+            .find(SEND_PID_OLD_CALL)
+            .map(|rel| marker + rel + SEND_PID_OLD_CALL.len())
+            .ok_or("v2 发送补丁调用锚未命中")?;
+        if &src[start..end] == SEND_PID_CODE {
+            return Ok(false);
+        }
+        src.replace_range(start..end, SEND_PID_CODE);
+        return Ok(true);
+    }
+    // 已安装的 v1 发送补丁也需要升级，不能因旧 marker 存在而跳过。
+    if let Some(marker) = src.find(TSW_SEND_PID_FLAG) {
+        let start = src[..marker]
+            .rfind(SEND_PID_OLD_PREFIX)
+            .ok_or("旧发送补丁起始锚未命中")?;
+        let call = src[marker..]
+            .find(SEND_PID_OLD_CALL)
+            .map(|rel| marker + rel)
+            .ok_or("旧发送补丁调用锚未命中")?;
+        src.replace_range(start..call + SEND_PID_OLD_CALL.len(), SEND_PID_CODE);
+        return Ok(true);
     }
     let Some(pos) = src.find(SEND_PID_ANCHOR) else {
         return Err("特征锚未命中：chatApi.sendMessage(eo(e))".into());
@@ -380,12 +444,20 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
             Err(e) => errs.push(e),
         }
     }
-    if !src.contains(TSW_SEND_PID_FLAG) {
-        match patch_send_project(&mut src) {
-            Ok(true) => changed = true,
-            Ok(false) => {}
-            Err(e) => errs.push(format!("发送项目替换失败：{e}")),
-        }
+    match patch_send_project(&mut src) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(e) => errs.push(format!("发送项目替换失败：{e}")),
+    }
+    match patch_send_context(&mut src) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(e) => errs.push(format!("发送上下文同步失败：{e}")),
+    }
+    match patch_subscribe_context(&mut src) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(e) => errs.push(format!("订阅上下文同步失败：{e}")),
     }
     if !changed {
         if errs.is_empty() {
