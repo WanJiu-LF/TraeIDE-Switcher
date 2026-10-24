@@ -270,27 +270,38 @@ return{success:true,deviceUpdated:deviceUpdated,diag:_diag};
 // 代价：新账号并不拥有该 project，发消息时服务端会返回 project_not_found（「项目不存在」）。
 pub const TSW_PID_FLAG: &str = "__TSW_PID__";
 
-const PID_PIN_TMPL: &str = r#"(function(_v){/*__TSW_PID__*/var _p=globalThis.__tsw_pid;if(typeof _p==="undefined"){_p=null;try{var _ls=typeof localStorage!=="undefined"?localStorage:null;if(_ls){_p=_ls.getItem("__tsw_project_id")||null;}}catch(_){}}if(_p&&/^[0-9a-f]{24}$/.test(_p))return _p;if(typeof _v==="string"&&/^[0-9a-f]{24}$/.test(_v)){globalThis.__tsw_pid=_v;try{var _l2=typeof localStorage!=="undefined"?localStorage:null;if(_l2)_l2.setItem("__tsw_project_id",_v);}catch(_){}}return _v;})(__ARG__)"#;
-
-fn pid_pin(arg: &str) -> String {
-    PID_PIN_TMPL.replace("__ARG__", arg)
-}
-
 const TSW_WS_FLAG: &str = "/*__TSW_WS__*/";
+const TSW_MERGE_FLAG: &str = "/*__TSW_MERGE__*/";
 
-/// ⑦ workbench：`project_id:e.context?.project_id` → 固定值表达式；
-/// 同时把真实工作区目录暴露给聊天模块（发送时按目录解析当前账号 project）。
-fn patch_pid_workbench(src: &mut String) -> Result<bool, String> {
+/// 把旧版固定 project 的 IIFE 改成直通：保留 marker（状态页可识别），不再改写 project。
+fn neutralize_pid_pins(src: &mut String) -> bool {
+    let prefix = "(function(_v){/*__TSW_PID__*/";
+    let tail = "return _v;})(";
     let mut changed = false;
-    if !src.contains(TSW_PID_FLAG) {
-        let needle = "project_id:e.context?.project_id";
-        let pos = src.find(needle).ok_or("特征锚未命中：client_info.project_id")?;
-        let arg = "e.context?.project_id";
-        let at = pos + "project_id:".len();
-        let pinned = pid_pin(arg);
-        src.replace_range(at..at + arg.len(), &pinned);
+    loop {
+        let Some(start) = src.find(prefix) else {
+            break;
+        };
+        let Some(rel) = src[start..].find(tail) else {
+            break;
+        };
+        let arg_at = start + rel + tail.len();
+        let Some(close_rel) = src[arg_at..].find(')') else {
+            break;
+        };
+        let end = arg_at + close_rel + 1;
+        let arg = src[arg_at..arg_at + close_rel].to_string();
+        let replacement = format!("(function(_v){{/*__TSW_PID__*/return _v}})({arg})");
+        src.replace_range(start..end, &replacement);
         changed = true;
     }
+    changed
+}
+
+/// ⑦ workbench：不再固定 project；只把真实工作区目录暴露给聊天模块，
+/// 供本地会话快照按工作区过滤。已安装的旧固定表达式会被改成直通。
+fn patch_pid_workbench(src: &mut String) -> Result<bool, String> {
+    let mut changed = neutralize_pid_pins(src);
     if !src.contains(TSW_WS_FLAG) {
         let anchor = "workspace_folder:m,";
         let pos = src.find(anchor).ok_or("特征锚未命中：workspace_folder")?;
@@ -301,129 +312,77 @@ fn patch_pid_workbench(src: &mut String) -> Result<bool, String> {
     Ok(changed)
 }
 
-/// ⑧ ai-modules-chat：`_projectStore.actions.setProjectId(<o>.project_id,<o>.real_project_id)`
-fn patch_pid_chat(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_PID_FLAG) {
-        return Ok(false);
-    }
-    let needle = "_projectStore.actions.setProjectId(";
-    let pos = src.find(needle).ok_or("特征锚未命中：project store setProjectId")?;
-    let args_at = pos + needle.len();
-    let close = src[args_at..].find(')').ok_or("setProjectId 参数未闭合")?;
-    let args = src[args_at..args_at + close].to_string();
-    let parts: Vec<&str> = args.split(',').collect();
-    if parts.len() != 2 {
-        return Err("setProjectId 参数数量异常".into());
-    }
-    let obj = parts[0]
-        .strip_suffix(".project_id")
-        .filter(|o| !o.is_empty() && o.bytes().all(is_ident_byte))
-        .ok_or("setProjectId 首参形态异常")?;
-    if parts[1].trim() != format!("{obj}.real_project_id") {
-        return Err("setProjectId 次参形态异常".into());
-    }
-    let replacement = format!(
-        "{},{}",
-        pid_pin(&format!("{obj}.project_id")),
-        pid_pin(&format!("{obj}.real_project_id"))
-    );
-    src.replace_range(args_at..args_at + close, &replacement);
-    Ok(true)
-}
-
 pub const TSW_SEND_PID_FLAG: &str = "__TSW_SENDPID__";
 const TSW_SEND_PID_V2_FLAG: &str = "__TSW_SENDPID_V2__";
-
-/// 发送请求的项目替换：服务端校验 project_id 归属，不校验 chat_session_id 归属。
-/// 固定 project_id 时界面保留原会话；发送时改传当前账号的工作区 project_id，
-/// 查询或创建失败则阻断发送，绝不回退到旧 project_id。
 const SEND_PID_ANCHOR: &str = "let S=ei(e),k=await this.chatApi.sendMessage(eo(e))";
 const SEND_PID_V2_PREFIX: &str = "let S=ei(e),__tsw_m=eo(e);";
 const SEND_PID_OLD_PREFIX: &str = "let S=ei(e),__tsw_m=eo(e);try{/*";
 const SEND_PID_OLD_CALL: &str = "let k=await this.chatApi.sendMessage(__tsw_m)";
-
-const SEND_PID_CODE: &str = r#"let S=ei(e),__tsw_m=eo(e);/*__TSW_SENDPID__*//*__TSW_SENDPID_V2__*/
-if(!__tsw_m||typeof __tsw_m!=="object")throw new Error("发送请求无效，已停止发送");
-if(!globalThis.__tsw_ai||typeof globalThis.__tsw_ai.request!=="function")throw new Error("当前账号项目服务未就绪，已停止发送");
-let __tsw_s=null;try{__tsw_s=this.sessionStore&&this.sessionStore.sessionById&&this.sessionStore.sessionById.get?this.sessionStore.sessionById.get(h):null;}catch(__tsw_e){}
-const __tsw_src=(__tsw_s&&__tsw_s.source)||__tsw_m.source||{};
-const __tsw_f=(__tsw_s&&(__tsw_s.mainFolder||__tsw_s.main_folder))||__tsw_src.local_folder||__tsw_src.remote_folder||(__tsw_s&&__tsw_s.worktreeData&&__tsw_s.worktreeData.worktreePath)||globalThis.__tsw_ws_folder||(typeof localStorage!=="undefined"?localStorage.getItem("__tsw_ws_folder")||"":"")||(__tsw_m.workspace_folders&&__tsw_m.workspace_folders[0])||__tsw_m.workspace_folder||"";
-if(!__tsw_f)throw new Error("无法定位会话工作区，已停止发送");
-const __tsw_data={project_kind:"workspace",workspace_type:"single_root",single_root_workspace_folder:__tsw_f,workspace_folders:[__tsw_f]};
-const __tsw_r=await globalThis.__tsw_ai.request({service:"lite",method:"get_or_create_project_v2",data:__tsw_data,context:{}});
-const __tsw_project=(r=>{let x=r;for(let i=0;i<8&&x&&typeof x==="object";i++){if(x.ok===false||x.success===false)throw new Error(x.message||x.error||"项目查询失败");if(x.code!==undefined&&String(x.code)!=="0")throw new Error(x.message||x.msg||"项目查询失败 (code "+x.code+")");if(typeof x.project_id==="string"&&x.project_id)return x;if(typeof x.json==="string"){try{x=JSON.parse(x.json);continue}catch(__e){}}if(x.data!==undefined){x=x.data;continue}break}throw new Error("项目查询响应缺少有效 ID")})(__tsw_r);
-if(typeof __tsw_project.project_id!=="string"||!/^[0-9a-f]{24}$/i.test(__tsw_project.project_id))throw new Error("当前账号项目 ID 无效，已停止发送");
-__tsw_m.project_id=__tsw_project.project_id;
-__tsw_m.project_kind="workspace";
-globalThis.__tsw_ctx_project=__tsw_project.project_id;
-let k=await this.chatApi.sendMessage(__tsw_m)"#;
-
 pub const TSW_SEND_CTX_FLAG: &str = "__TSW_SENDCTX__";
 const SEND_CTX_ANCHOR: &str = r#"async sendMessage(e,t){return this.adapter.invoke({service:"chat",method:"sendMessage",params:e,context:{...this.getContext(),...t&&{_invokeOptions:t}}})}"#;
 const SEND_CTX_CODE: &str = r#"async sendMessage(e,t){/*__TSW_SENDCTX__*/const __tsw_c={...this.getContext(),...e&&e.project_id?{project_id:e.project_id}:{},...t&&{_invokeOptions:t}};return this.adapter.invoke({service:"chat",method:"sendMessage",params:e,context:__tsw_c})}"#;
-
-/// 服务端可能从请求 context 读取 project_id；把发送参数里的项目同步进 context，
-/// 避免只改 data 时仍被旧账号 project 覆盖。
-fn patch_send_context(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_SEND_CTX_FLAG) {
-        return Ok(false);
-    }
-    let Some(pos) = src.find(SEND_CTX_ANCHOR) else {
-        return Err("特征锚未命中：chat sendMessage context".into());
-    };
-    src.replace_range(pos..pos + SEND_CTX_ANCHOR.len(), SEND_CTX_CODE);
-    Ok(true)
-}
-
-const SUB_CTX_FLAG: &str = "__TSW_SUBCTX__";
 const SUB_CTX_OLD: &str = r#"{service:"chat",method:"subscribe",params:{chat_session_id:e,...r},context:this.getContext(),lastEventId:t?.lastEventId}"#;
 const SUB_CTX_NEW: &str = r#"{service:"chat",method:"subscribe",params:{chat_session_id:e,...r},context:{...this.getContext(),...globalThis.__tsw_ctx_project?{project_id:globalThis.__tsw_ctx_project}:{}},lastEventId:t?.lastEventId}/*__TSW_SUBCTX__*/"#;
 
-/// 发送后的事件订阅同样带旧 project context；同步为发送时解析出的当前账号 project。
-fn patch_subscribe_context(src: &mut String) -> Result<bool, String> {
-    if src.contains(SUB_CTX_FLAG) {
-        return Ok(false);
+/// 回滚 0.1.19~0.1.23 的发送项目替换与 context 覆盖，恢复原始发送链路。
+fn strip_legacy_send(src: &mut String) -> bool {
+    let mut changed = false;
+    if let Some(marker) = src.find(TSW_SEND_PID_V2_FLAG) {
+        if let Some(start) = src[..marker].rfind(SEND_PID_V2_PREFIX) {
+            if let Some(rel) = src[marker..].find(SEND_PID_OLD_CALL) {
+                let end = marker + rel + SEND_PID_OLD_CALL.len();
+                src.replace_range(start..end, SEND_PID_ANCHOR);
+                changed = true;
+            }
+        }
+    } else if let Some(marker) = src.find(TSW_SEND_PID_FLAG) {
+        if let Some(start) = src[..marker].rfind(SEND_PID_OLD_PREFIX) {
+            if let Some(rel) = src[marker..].find(SEND_PID_OLD_CALL) {
+                let end = marker + rel + SEND_PID_OLD_CALL.len();
+                src.replace_range(start..end, SEND_PID_ANCHOR);
+                changed = true;
+            }
+        }
     }
-    let Some(pos) = src.find(SUB_CTX_OLD) else {
-        return Err("特征锚未命中：chat subscribe context".into());
-    };
-    src.replace_range(pos..pos + SUB_CTX_OLD.len(), SUB_CTX_NEW);
-    Ok(true)
+    if src.contains(SEND_CTX_CODE) {
+        *src = src.replace(SEND_CTX_CODE, SEND_CTX_ANCHOR);
+        changed = true;
+    }
+    if src.contains(SUB_CTX_NEW) {
+        *src = src.replace(SUB_CTX_NEW, SUB_CTX_OLD);
+        changed = true;
+    }
+    changed
 }
 
-fn patch_send_project(src: &mut String) -> Result<bool, String> {
-    if let Some(marker) = src.find(TSW_SEND_PID_V2_FLAG) {
-        // v2 之前曾只按 marker 判断幂等，导致已有旧 v2 体不会接收后续修正。
-        // 以唯一发送前缀和 sendMessage 调用界定替换范围；相同内容仍保持幂等。
-        let start = src[..marker]
-            .rfind(SEND_PID_V2_PREFIX)
-            .ok_or("v2 发送补丁起始锚未命中")?;
-        let end = src[marker..]
-            .find(SEND_PID_OLD_CALL)
-            .map(|rel| marker + rel + SEND_PID_OLD_CALL.len())
-            .ok_or("v2 发送补丁调用锚未命中")?;
-        if &src[start..end] == SEND_PID_CODE {
-            return Ok(false);
-        }
-        src.replace_range(start..end, SEND_PID_CODE);
-        return Ok(true);
+const SESSION_MERGE_ANCHOR: &str = "o.sessionDomainService.batchSetSessions(u);";
+const SESSION_MERGE_CODE: &str = r#"u=(function(__u,__p){try{/*__TSW_MERGE__*/
+var __K="__tsw_session_snapshot_v2",__W=String(globalThis.__tsw_ws_folder||"").split("\\").join("/").toLowerCase(),__C=[];
+try{__C=JSON.parse(localStorage.getItem(__K)||"[]")||[]}catch(__e){__C=[]}
+var __I=new Set(__u.map(function(s){return s.sessionId})),__O=__u.slice();
+for(var __j=0;__j<__C.length;__j++){var __s=__C[__j];
+if(!__s||!__s.sessionId||__I.has(__s.sessionId))continue;
+var __f=String(__s.mainFolder||(__s.source&&(__s.source.local_folder||__s.source.remote_folder))||"").split("\\").join("/").toLowerCase();
+if(__W&&__f&&__f!==__W)continue;
+var __n=Object.assign({},__s);
+__n.__tsw_owner_project=__s.__tsw_owner_project||__s.localProjectId;
+if(__p)__n.localProjectId=__p;
+__n.remoteProjectId="";__n.status="finished";__n.isCurrent=false;
+delete __n.messages;delete __n.pendingMessages;
+__O.push(__n);__I.add(__n.sessionId);}
+var __P=__O.map(function(s){var x=Object.assign({},s);delete x.messages;delete x.pendingMessages;
+x.__tsw_owner_project=x.__tsw_owner_project||s.localProjectId;return x}).slice(0,400);
+try{localStorage.setItem(__K,JSON.stringify(__P))}catch(__e){}
+return __O;}catch(__e){return __u}})(u,e);o.sessionDomainService.batchSetSessions(u);"#;
+
+fn patch_session_merge(src: &mut String) -> Result<bool, String> {
+    if src.contains(TSW_MERGE_FLAG) {
+        return Ok(false);
     }
-    // 已安装的 v1 发送补丁也需要升级，不能因旧 marker 存在而跳过。
-    if let Some(marker) = src.find(TSW_SEND_PID_FLAG) {
-        let start = src[..marker]
-            .rfind(SEND_PID_OLD_PREFIX)
-            .ok_or("旧发送补丁起始锚未命中")?;
-        let call = src[marker..]
-            .find(SEND_PID_OLD_CALL)
-            .map(|rel| marker + rel)
-            .ok_or("旧发送补丁调用锚未命中")?;
-        src.replace_range(start..call + SEND_PID_OLD_CALL.len(), SEND_PID_CODE);
-        return Ok(true);
-    }
-    let Some(pos) = src.find(SEND_PID_ANCHOR) else {
-        return Err("特征锚未命中：chatApi.sendMessage(eo(e))".into());
+    let Some(pos) = src.find(SESSION_MERGE_ANCHOR) else {
+        return Err("特征锚未命中：session batchSetSessions".into());
     };
-    src.replace_range(pos..pos + SEND_PID_ANCHOR.len(), SEND_PID_CODE);
+    src.replace_range(pos..pos + SESSION_MERGE_ANCHOR.len(), SESSION_MERGE_CODE);
     Ok(true)
 }
 
@@ -446,29 +405,13 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
         return Err(io::Error::new(io::ErrorKind::NotFound, "未找到 ai-modules-chat 模块"));
     }
     let mut src = std::fs::read_to_string(chat)?;
-    let mut changed = false;
+    let mut changed = neutralize_pid_pins(&mut src);
+    changed |= strip_legacy_send(&mut src);
     let mut errs = Vec::new();
-    if !src.contains(TSW_PID_FLAG) {
-        match patch_pid_chat(&mut src) {
-            Ok(true) => changed = true,
-            Ok(false) => {}
-            Err(e) => errs.push(e),
-        }
-    }
-    match patch_send_project(&mut src) {
+    match patch_session_merge(&mut src) {
         Ok(true) => changed = true,
         Ok(false) => {}
-        Err(e) => errs.push(format!("发送项目替换失败：{e}")),
-    }
-    match patch_send_context(&mut src) {
-        Ok(true) => changed = true,
-        Ok(false) => {}
-        Err(e) => errs.push(format!("发送上下文同步失败：{e}")),
-    }
-    match patch_subscribe_context(&mut src) {
-        Ok(true) => changed = true,
-        Ok(false) => {}
-        Err(e) => errs.push(format!("订阅上下文同步失败：{e}")),
+        Err(e) => errs.push(format!("本地会话合并失败：{e}")),
     }
     if !changed {
         if errs.is_empty() {
@@ -937,15 +880,11 @@ fn scan_tsw_patched(paths: &IdePaths) -> bool {
             .unwrap_or(false)
 }
 
-/// 旧版 project_id 固定补丁是否仍在（workbench + ai-modules-chat 双处）
+/// 本地会话合并补丁是否已安装（ai-modules-chat）
 fn scan_chat_pinned(paths: &IdePaths) -> bool {
-    let wb = std::fs::read_to_string(paths.workbench_js())
-        .map(|s| s.contains(TSW_PID_FLAG))
-        .unwrap_or(false);
-    let chat_src = std::fs::read_to_string(paths.chat_module_js()).unwrap_or_default();
-    let chat = chat_src.contains(TSW_PID_FLAG) && chat_src.contains(TSW_SEND_PID_FLAG);
-    // workbench 固定 + chat 模块固定与发送替换都齐全才算生效
-    wb && chat
+    std::fs::read_to_string(paths.chat_module_js())
+        .map(|s| s.contains(TSW_MERGE_FLAG))
+        .unwrap_or(false)
 }
 
 /// 会话归属补丁状态（GUI 展示用）
