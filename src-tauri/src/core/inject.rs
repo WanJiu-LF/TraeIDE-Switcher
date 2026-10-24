@@ -608,12 +608,21 @@ pub fn patch_workbench(paths: &IdePaths) -> io::Result<InjectStatus> {
 
 pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
     let mut src = std::fs::read_to_string(wb)?;
+    let reload_cmd = patch_reload_command(&mut src);
+    let neutralized = neutralize_pid_pins(&mut src);
     let already_cmd = src.contains(TSW_CMD_FLAG);
     let already_ret = src.contains(TSW_WRET_FLAG);
-    let already_pid = src.contains(TSW_PID_FLAG);
+    let already_ws = src.contains(TSW_WS_FLAG);
     let already_aic = src.contains(TSW_AIC_FLAG);
     let already_rpc = src.contains(TSW_RPC_FLAG);
-    if already_cmd && already_ret && already_pid && already_aic && already_rpc {
+    if !reload_cmd
+        && !neutralized
+        && already_cmd
+        && already_ret
+        && already_ws
+        && already_aic
+        && already_rpc
+    {
         return Ok(InjectStatus::AlreadyPatched);
     }
     ensure_bak(wb)?;
@@ -628,7 +637,7 @@ pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
             errs.push(e);
         }
     }
-    if !already_pid {
+    if !already_ws {
         if let Err(e) = patch_pid_workbench(&mut src) {
             errs.push(e);
         }
@@ -679,12 +688,30 @@ fn find_register_anchor(src: &str) -> Result<(String, String, usize), String> {
     Ok((caller, token.to_string(), after + ti + anchor_tail.len()))
 }
 
+const TSW_RELOAD_CMD_FLAG: &str = "__TSW_RELOAD_CMD__";
+const OLD_REPLACE_CMD: &str = "refreshUserInfo({__TSW_REPLACE__:true,device:p.device,userInfo:p.userInfo})/*__TSW_CMD__*/";
+const NEW_REPLACE_CMD: &str = r#"refreshUserInfo({__TSW_REPLACE__:true,device:p.device,userInfo:p.userInfo})/*__TSW_RELOAD_CMD__*/.then(function(r){setTimeout(function(){try{i.executeCommand("workbench.action.reloadWindow")}catch(_){}},1800);return r;})/*__TSW_CMD__*/"#;
+
+/// 给已安装的 _tsw.replaceUserInfo 命令补上窗口重载：热换号后聊天模块仍持有旧账号的
+/// 当前会话/project，AI 服务在新账号下初始化失败；重载窗口让聊天模块按新账号重新初始化，
+/// 本地会话快照在重载后重新合并，记录不丢。
+fn patch_reload_command(src: &mut String) -> bool {
+    if src.contains(TSW_RELOAD_CMD_FLAG) {
+        return false;
+    }
+    if src.contains(OLD_REPLACE_CMD) {
+        *src = src.replace(OLD_REPLACE_CMD, NEW_REPLACE_CMD);
+        true
+    } else {
+        false
+    }
+}
+
 /// ④ 命令注册：锚 X.registerCommand("icube.common.refreshUserInfo",async function(i,e){await i.get(Y).refreshUserInfo(!0)})
 fn patch_register_command(src: &mut String) -> Result<(), String> {
     let (caller, token, anchor_end) = find_register_anchor(src)?;
-    let insertion = format!(
-        ",{caller}.registerCommand(\"_tsw.replaceUserInfo\",async function(i,payload){{const p=payload&&typeof payload===\"object\"&&payload.userInfo?payload:{{userInfo:payload}};return await i.get({token}).refreshUserInfo({{__TSW_REPLACE__:true,device:p.device,userInfo:p.userInfo}}){TSW_CMD_FLAG}}})"
-    );
+    let template = r#",__CALLER__.registerCommand("_tsw.replaceUserInfo",async function(i,payload){const p=payload&&typeof payload==="object"&&payload.userInfo?payload:{userInfo:payload};return await i.get(__TOKEN__).refreshUserInfo({__TSW_REPLACE__:true,device:p.device,userInfo:p.userInfo})/*__TSW_RELOAD_CMD__*/.then(function(r){setTimeout(function(){try{i.executeCommand("workbench.action.reloadWindow")}catch(_){}},1800);return r;})/*__TSW_CMD__*/})"#;
+    let insertion = template.replace("__CALLER__", &caller).replace("__TOKEN__", &token);
     src.insert_str(anchor_end, &insertion);
     Ok(())
 }
