@@ -1,4 +1,4 @@
-// __sw 注入桥：对 Trae main.js 做特征锚补丁，暴露热换号入口
+﻿// __sw 注入桥：对 Trae main.js 做特征锚补丁，暴露热换号入口
 // 补丁点1：holder 类 setUserInfo(e,i){...fire({userInfo,forceLogout})} 定义处劫持捕获 this
 // 补丁点2：main.js 尾部追加 globalThis.__sw 桥（提供 setUserInfo(json)）
 // 两处均为精确文本手术，可逆、幂等、跨版本（特征锚=方法名+forceLogout 属性名）
@@ -148,21 +148,6 @@ fn repair_v2_require(src: &mut String) -> bool {
     true
 }
 
-/// 移除旧注入体里对 setI18nApiHostByUserInfo 的调用：CN 3.4.4 该方法不存在，
-/// 调用会抛 CodeExpectedError 并中断热换号，导致 AI 服务启动异常。
-fn strip_bad_i18n_call(src: &mut String) -> bool {
-    let start_marker = "try{const _found=[];const _seen=new Set();";
-    let end_marker = "try{const _hInfo=";
-    let Some(start) = src.find(start_marker) else {
-        return false;
-    };
-    let Some(rel) = src[start..].find(end_marker) else {
-        return false;
-    };
-    src.replace_range(start..start + rel, "");
-    true
-}
-
 /// v2 handler 头部 marker 检测块（{PROP} = userInfo 所在属性，intl=j / CN=userContext）
 /// 逻辑移植自 windsurf_switcher 热切换 handler（实战验证版），去掉冗余日志。
 pub const TSW_V2_BODY: &str = r#"var _tsw_req=globalThis.__sw_req||(typeof require==="function"?require:null);
@@ -188,6 +173,13 @@ try{const _ahaMod=(globalThis.__sw_req||require)("electron/main");const _aha=_ah
 for(const _k of Object.getOwnPropertyNames(this)){try{const _v=this[_k];if(_v&&typeof _v==="object"&&typeof _v.getDeviceId==="function"&&typeof _v.getCommonApiParams==="function"&&remoteDid){try{_v.b=remoteDid;}catch(_){}if(!_v.__sw_prod){_v.getDeviceId=function(){return globalThis.__sw_did||remoteDid||"0";};_v.__sw_prod=1;}}}catch(_){}}
 }
 if(t.userInfo&&t.userInfo.host){
+try{const _found=[];const _seen=new Set();
+function _deep(o,d2){if(!o||typeof o!=="object"||d2>4||_seen.has(o))return;_seen.add(o);
+if(typeof o.setI18nApiHostByUserInfo==="function")_found.push(o);
+if(o instanceof Map){o.forEach(v=>_deep(v,d2+1));}else{for(const _k of Object.getOwnPropertyNames(o)){try{_deep(o[_k],d2+1);}catch(_){}}}}
+_deep(this,0);
+for(const _oas of _found){_oas._apiHost=t.userInfo.host;try{_oas.setI18nApiHostByUserInfo(t.userInfo);}catch(_e){}}
+}catch(_e){}
 try{const _hInfo=JSON.stringify({consoleHost:t.userInfo.consoleHost||"",apiHost:t.userInfo.host});
 for(const _k of Object.getOwnPropertyNames(this)){const _v=this[_k];if(_v&&typeof _v==="object"){
 if(typeof _v.setItem==="function"){try{_v.setItem("iCubeHostInfo",_hInfo);}catch(_){}}
@@ -270,190 +262,67 @@ return{success:true,deviceUpdated:deviceUpdated,diag:_diag};
 }
 "#;
 
-// ════════════════ 会话/任务记录归属（固定 project_id，跨号保留对话）════════════════
+// ════════════════ 会话/任务记录归属补丁（对话记录随号保留）════════════════
 //
-// Trae 的 project 按账号归属。旧版把 project_id 固定成 localStorage 的共享值
-// （workbench 的 client_info.project_id + ai-modules-chat 的 setProjectId），
-// 换号后仍复用同一个 project，会话列表与任务记录得以跨账号保留。
-// 代价：新账号并不拥有该 project，发消息时服务端会返回 project_not_found（「项目不存在」）。
+// 根因（真机取证 CN 3.3.100）：
+//   AI 会话与任务列表按 (user_id, project_id) 归属。project_id 由 ai-modules-chat 的
+//   createProject 取得后写进 project store（renderer.log 实测：每个账号各自持有一个
+//   project_id，跨重启复用，如 498492885962313→6acf2a58…、1910309375982379→6ad169ff…）。
+//   切号后客户端用自己的 project 查询会话列表 → 上一个账号的对话记录不可见。
+// 修法：把 project_id 固定成一个共享值（localStorage 持久化，首次运行即固化），
+//   所有账号落进同一 project，切号前后对话记录并存；首次运行取到的仍是本账号原值，
+//   因此现有对话不会丢。
+//   ⑦ workbench：client_info.project_id（所有请求的 project 出口）
+//   ⑧ ai-modules-chat：project store 的 setProjectId（会话查询真正的取值处）
 pub const TSW_PID_FLAG: &str = "__TSW_PID__";
 
-const TSW_WS_FLAG: &str = "/*__TSW_WS__*/";
-const TSW_MERGE_FLAG: &str = "/*__TSW_MERGE__*/";
+const PID_PIN_TMPL: &str = r#"(function(_v){/*__TSW_PID__*/var _p=globalThis.__tsw_pid;if(typeof _p==="undefined"){_p=null;try{var _ls=typeof localStorage!=="undefined"?localStorage:null;if(_ls){_p=_ls.getItem("__tsw_project_id")||null;}}catch(_){}}if(_p&&/^[0-9a-f]{24}$/.test(_p))return _p;if(typeof _v==="string"&&/^[0-9a-f]{24}$/.test(_v)){globalThis.__tsw_pid=_v;try{var _l2=typeof localStorage!=="undefined"?localStorage:null;if(_l2)_l2.setItem("__tsw_project_id",_v);}catch(_){}}return _v;})(__ARG__)"#;
 
-/// 把旧版固定 project 的 IIFE 改成直通：保留 marker（状态页可识别），不再改写 project。
-fn neutralize_pid_pins(src: &mut String) -> bool {
-    let prefix = "(function(_v){/*__TSW_PID__*/";
-    let tail = "return _v;})(";
-    let mut changed = false;
-    loop {
-        let Some(start) = src.find(prefix) else {
-            break;
-        };
-        let Some(rel) = src[start..].find(tail) else {
-            break;
-        };
-        let arg_at = start + rel + tail.len();
-        let Some(close_rel) = src[arg_at..].find(')') else {
-            break;
-        };
-        let end = arg_at + close_rel + 1;
-        let arg = src[arg_at..arg_at + close_rel].to_string();
-        let replacement = format!("(function(_v){{/*__TSW_PID__*/return _v}})({arg})");
-        src.replace_range(start..end, &replacement);
-        changed = true;
-    }
-    changed
+fn pid_pin(arg: &str) -> String {
+    PID_PIN_TMPL.replace("__ARG__", arg)
 }
 
-/// ⑦ workbench：不再固定 project；只把真实工作区目录暴露给聊天模块，
-/// 供本地会话快照按工作区过滤。已安装的旧固定表达式会被改成直通。
+/// ⑦ workbench：`project_id:e.context?.project_id` → 固定值表达式
 fn patch_pid_workbench(src: &mut String) -> Result<bool, String> {
-    let mut changed = neutralize_pid_pins(src);
-    if !src.contains(TSW_WS_FLAG) {
-        let anchor = "workspace_folder:m,";
-        let pos = src.find(anchor).ok_or("特征锚未命中：workspace_folder")?;
-        let replacement = "workspace_folder:(globalThis.__tsw_ws_folder=m,(function(){try{if(m&&typeof localStorage!==\"undefined\")localStorage.setItem(\"__tsw_ws_folder\",m)}catch(_){}})(),m),/*__TSW_WS__*/";
-        src.replace_range(pos..pos + anchor.len(), replacement);
-        changed = true;
-    }
-    Ok(changed)
-}
-
-pub const TSW_SEND_PID_FLAG: &str = "__TSW_SENDPID__";
-const TSW_SEND_PID_V2_FLAG: &str = "__TSW_SENDPID_V2__";
-const SEND_PID_ANCHOR: &str = "let S=ei(e),k=await this.chatApi.sendMessage(eo(e))";
-const SEND_PID_V2_PREFIX: &str = "let S=ei(e),__tsw_m=eo(e);";
-const SEND_PID_OLD_PREFIX: &str = "let S=ei(e),__tsw_m=eo(e);try{/*";
-const SEND_PID_OLD_CALL: &str = "let k=await this.chatApi.sendMessage(__tsw_m)";
-pub const TSW_SEND_CTX_FLAG: &str = "__TSW_SENDCTX__";
-const SEND_CTX_ANCHOR: &str = r#"async sendMessage(e,t){return this.adapter.invoke({service:"chat",method:"sendMessage",params:e,context:{...this.getContext(),...t&&{_invokeOptions:t}}})}"#;
-const SEND_CTX_CODE: &str = r#"async sendMessage(e,t){/*__TSW_SENDCTX__*/const __tsw_c={...this.getContext(),...e&&e.project_id?{project_id:e.project_id}:{},...t&&{_invokeOptions:t}};return this.adapter.invoke({service:"chat",method:"sendMessage",params:e,context:__tsw_c})}"#;
-const SUB_CTX_OLD: &str = r#"{service:"chat",method:"subscribe",params:{chat_session_id:e,...r},context:this.getContext(),lastEventId:t?.lastEventId}"#;
-const SUB_CTX_NEW: &str = r#"{service:"chat",method:"subscribe",params:{chat_session_id:e,...r},context:{...this.getContext(),...globalThis.__tsw_ctx_project?{project_id:globalThis.__tsw_ctx_project}:{}},lastEventId:t?.lastEventId}/*__TSW_SUBCTX__*/"#;
-
-/// 回滚 0.1.19~0.1.23 的发送项目替换与 context 覆盖，恢复原始发送链路。
-fn strip_legacy_send(src: &mut String) -> bool {
-    if src.contains(TSW_SEND_PID_V3_FLAG) {
-        return false;
-    }
-    let mut changed = false;
-    if let Some(marker) = src.find(TSW_SEND_PID_V2_FLAG) {
-        if let Some(start) = src[..marker].rfind(SEND_PID_V2_PREFIX) {
-            if let Some(rel) = src[marker..].find(SEND_PID_OLD_CALL) {
-                let end = marker + rel + SEND_PID_OLD_CALL.len();
-                src.replace_range(start..end, SEND_PID_ANCHOR);
-                changed = true;
-            }
-        }
-    } else if let Some(marker) = src.find(TSW_SEND_PID_FLAG) {
-        if let Some(start) = src[..marker].rfind(SEND_PID_OLD_PREFIX) {
-            if let Some(rel) = src[marker..].find(SEND_PID_OLD_CALL) {
-                let end = marker + rel + SEND_PID_OLD_CALL.len();
-                src.replace_range(start..end, SEND_PID_ANCHOR);
-                changed = true;
-            }
-        }
-    }
-    if src.contains(SEND_CTX_CODE) {
-        *src = src.replace(SEND_CTX_CODE, SEND_CTX_ANCHOR);
-        changed = true;
-    }
-    if src.contains(SUB_CTX_NEW) {
-        *src = src.replace(SUB_CTX_NEW, SUB_CTX_OLD);
-        changed = true;
-    }
-    changed
-}
-
-const TSW_MERGE_V3_FLAG: &str = "__TSW_MERGE_V3__";
-const SESSION_MERGE_ANCHOR: &str = "o.sessionDomainService.batchSetSessions(u);";
-const SESSION_MERGE_CODE: &str = r#"u=(function(__u,__p){try{/*__TSW_MERGE__*//*__TSW_MERGE_V3__*/
-var __K="__tsw_session_snapshot_v3",__W=String(globalThis.__tsw_ws_folder||"").split("\\").join("/").toLowerCase(),__C=[];
-try{__C=JSON.parse(localStorage.getItem(__K)||"[]")||[]}catch(__e){__C=[]}
-var __I=new Set(__u.map(function(s){return s.sessionId})),__O=__u.slice();
-for(var __j=0;__j<__C.length;__j++){var __s=__C[__j];
-if(!__s||!__s.sessionId||__I.has(__s.sessionId))continue;
-var __f=String(__s.mainFolder||(__s.source&&(__s.source.local_folder||__s.source.remote_folder))||"").split("\\").join("/").toLowerCase();
-if(__W&&__f&&__f!==__W)continue;
-var __n=Object.assign({},__s);
-__n.__tsw_owner_project=__s.__tsw_owner_project||__s.localProjectId;
-__n.localProjectId=__n.__tsw_owner_project;
-__n.remoteProjectId="";__n.status="finished";__n.isCurrent=false;
-delete __n.messages;delete __n.pendingMessages;
-__O.push(__n);__I.add(__n.sessionId);}
-var __P=__O.map(function(s){var x=Object.assign({},s);delete x.messages;delete x.pendingMessages;
-x.__tsw_owner_project=x.__tsw_owner_project||s.localProjectId;return x}).slice(0,400);
-try{localStorage.setItem(__K,JSON.stringify(__P))}catch(__e){}
-return __O;}catch(__e){return __u}})(u,e);o.sessionDomainService.batchSetSessions(u);"#;
-
-fn patch_session_merge(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_MERGE_V3_FLAG) {
+    if src.contains(TSW_PID_FLAG) {
         return Ok(false);
     }
-    let Some(anchor_pos) = src.find(SESSION_MERGE_ANCHOR) else {
-        return Err("特征锚未命中：session batchSetSessions".into());
-    };
-    if let Some(flag) = src.find(TSW_MERGE_FLAG) {
-        let start = src[..flag]
-            .rfind("u=(function(__u,__p)")
-            .ok_or("旧会话合并起始锚未命中")?;
-        let end = flag + src[flag..].find(SESSION_MERGE_ANCHOR).ok_or("旧会话合并结束锚未命中")?
-            + SESSION_MERGE_ANCHOR.len();
-        src.replace_range(start..end, SESSION_MERGE_CODE);
-        return Ok(true);
-    }
-    src.replace_range(anchor_pos..anchor_pos + SESSION_MERGE_ANCHOR.len(), SESSION_MERGE_CODE);
+    let needle = "project_id:e.context?.project_id";
+    let pos = src.find(needle).ok_or("特征锚未命中：client_info.project_id")?;
+    let arg = "e.context?.project_id";
+    let at = pos + "project_id:".len();
+    let pinned = pid_pin(arg);
+    src.replace_range(at..at + arg.len(), &pinned);
     Ok(true)
 }
 
-const TSW_SEND_PID_V3_FLAG: &str = "__TSW_SENDPID_V3__";
-const SEND_PID_V3_CODE: &str = r#"let S=ei(e),__tsw_m=eo(e);/*__TSW_SENDPID__*//*__TSW_SENDPID_V3__*/
-if(!__tsw_m||typeof __tsw_m!=="object")throw new Error("发送请求无效，已停止发送");
-if(!globalThis.__tsw_ai||typeof globalThis.__tsw_ai.request!=="function")throw new Error("当前账号项目服务未就绪，已停止发送");
-let __tsw_s=null;try{__tsw_s=this.sessionStore&&this.sessionStore.sessionById&&this.sessionStore.sessionById.get?this.sessionStore.sessionById.get(h):null;}catch(__tsw_e){}
-const __tsw_src=(__tsw_s&&__tsw_s.source)||__tsw_m.source||{};
-const __tsw_f=(__tsw_s&&(__tsw_s.mainFolder||__tsw_s.main_folder))||__tsw_src.local_folder||__tsw_src.remote_folder||(__tsw_s&&__tsw_s.worktreeData&&__tsw_s.worktreeData.worktreePath)||globalThis.__tsw_ws_folder||(typeof localStorage!=="undefined"?localStorage.getItem("__tsw_ws_folder")||"":"")||(__tsw_m.workspace_folders&&__tsw_m.workspace_folders[0])||__tsw_m.workspace_folder||"";
-if(!__tsw_f)throw new Error("无法定位会话工作区，已停止发送");
-const __tsw_data={project_kind:"workspace",workspace_type:"single_root",single_root_workspace_folder:__tsw_f,workspace_folders:[__tsw_f]};
-const __tsw_r=await globalThis.__tsw_ai.request({service:"lite",method:"get_or_create_project_v2",data:__tsw_data,context:{}});
-const __tsw_project=(r=>{let x=r;for(let i=0;i<8&&x&&typeof x==="object";i++){if(x.ok===false||x.success===false)throw new Error(x.message||x.error||"项目查询失败");if(x.code!==undefined&&String(x.code)!=="0")throw new Error(x.message||x.msg||"项目查询失败 (code "+x.code+")");if(typeof x.project_id==="string"&&x.project_id)return x;if(typeof x.json==="string"){try{x=JSON.parse(x.json);continue}catch(__e){}}if(x.data!==undefined){x=x.data;continue}break}throw new Error("项目查询响应缺少有效 ID")})(__tsw_r);
-if(typeof __tsw_project.project_id!=="string"||!/^[0-9a-f]{24}$/i.test(__tsw_project.project_id))throw new Error("当前账号项目 ID 无效，已停止发送");
-__tsw_m.project_id=__tsw_project.project_id;
-__tsw_m.project_kind="workspace";
-globalThis.__tsw_ctx_project=__tsw_project.project_id;
-let k=await this.chatApi.sendMessage(__tsw_m)"#;
-
-fn patch_send_project_v3(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_SEND_PID_V3_FLAG) {
+/// ⑧ ai-modules-chat：`_projectStore.actions.setProjectId(<o>.project_id,<o>.real_project_id)`
+fn patch_pid_chat(src: &mut String) -> Result<bool, String> {
+    if src.contains(TSW_PID_FLAG) {
         return Ok(false);
     }
-    let Some(pos) = src.find(SEND_PID_ANCHOR) else {
-        return Err("特征锚未命中：chatApi.sendMessage(eo(e))".into());
-    };
-    src.replace_range(pos..pos + SEND_PID_ANCHOR.len(), SEND_PID_V3_CODE);
-    Ok(true)
-}
-
-fn patch_send_context(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_SEND_CTX_FLAG) {
-        return Ok(false);
+    let needle = "_projectStore.actions.setProjectId(";
+    let pos = src.find(needle).ok_or("特征锚未命中：project store setProjectId")?;
+    let args_at = pos + needle.len();
+    let close = src[args_at..].find(')').ok_or("setProjectId 参数未闭合")?;
+    let args = src[args_at..args_at + close].to_string();
+    let parts: Vec<&str> = args.split(',').collect();
+    if parts.len() != 2 {
+        return Err("setProjectId 参数数量异常".into());
     }
-    let Some(pos) = src.find(SEND_CTX_ANCHOR) else {
-        return Err("特征锚未命中：chat sendMessage context".into());
-    };
-    src.replace_range(pos..pos + SEND_CTX_ANCHOR.len(), SEND_CTX_CODE);
-    Ok(true)
-}
-
-fn patch_subscribe_context(src: &mut String) -> Result<bool, String> {
-    if src.contains("__TSW_SUBCTX__") {
-        return Ok(false);
+    let obj = parts[0]
+        .strip_suffix(".project_id")
+        .filter(|o| !o.is_empty() && o.bytes().all(is_ident_byte))
+        .ok_or("setProjectId 首参形态异常")?;
+    if parts[1].trim() != format!("{obj}.real_project_id") {
+        return Err("setProjectId 次参形态异常".into());
     }
-    let Some(pos) = src.find(SUB_CTX_OLD) else {
-        return Err("特征锚未命中：chat subscribe context".into());
-    };
-    src.replace_range(pos..pos + SUB_CTX_OLD.len(), SUB_CTX_NEW);
+    let replacement = format!(
+        "{},{}",
+        pid_pin(&format!("{obj}.project_id")),
+        pid_pin(&format!("{obj}.real_project_id"))
+    );
+    src.replace_range(args_at..args_at + close, &replacement);
     Ok(true)
 }
 
@@ -476,43 +345,11 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
         return Err(io::Error::new(io::ErrorKind::NotFound, "未找到 ai-modules-chat 模块"));
     }
     let mut src = std::fs::read_to_string(chat)?;
-    let mut changed = neutralize_pid_pins(&mut src);
-    changed |= strip_legacy_send(&mut src);
-    let mut errs = Vec::new();
-    match patch_send_project_v3(&mut src) {
-        Ok(true) => changed = true,
-        Ok(false) => {}
-        Err(e) => errs.push(format!("发送项目替换失败：{e}")),
-    }
-    match patch_send_context(&mut src) {
-        Ok(true) => changed = true,
-        Ok(false) => {}
-        Err(e) => errs.push(format!("发送上下文同步失败：{e}")),
-    }
-    match patch_subscribe_context(&mut src) {
-        Ok(true) => changed = true,
-        Ok(false) => {}
-        Err(e) => errs.push(format!("订阅上下文同步失败：{e}")),
-    }
-    match patch_session_merge(&mut src) {
-        Ok(true) => changed = true,
-        Ok(false) => {}
-        Err(e) => errs.push(format!("本地会话合并失败：{e}")),
-    }
-    if !changed {
-        if errs.is_empty() {
-            return Ok(InjectStatus::AlreadyPatched);
-        }
-        return Err(io::Error::new(io::ErrorKind::NotFound, errs.join("; ")));
-    }
-    if !errs.is_empty() {
-        crate::core::logger::log(
-            crate::core::logger::Level::Warn,
-            crate::core::logger::Source::System,
-            format!("会话补丁部分未应用：{}", errs.join("; ")),
-        );
+    if src.contains(TSW_PID_FLAG) {
+        return Ok(InjectStatus::AlreadyPatched);
     }
     ensure_bak_named(chat)?;
+    patch_pid_chat(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     std::fs::write(chat, src)?;
     Ok(InjectStatus::Patched)
 }
@@ -654,9 +491,8 @@ pub fn patch_main(paths: &IdePaths) -> io::Result<InjectStatus> {
 pub fn patch_main_file(main: &std::path::Path) -> io::Result<InjectStatus> {
     let mut src = std::fs::read_to_string(main)?;
     let repaired = repair_v2_require(&mut src);
-    let stripped = strip_bad_i18n_call(&mut src);
     if src.contains(TSW_V2_FLAG) && src.contains(TSW_ICDRS_FLAG) {
-        if repaired || stripped {
+        if repaired {
             std::fs::write(main, &src)?;
             return Ok(InjectStatus::Patched);
         }
@@ -686,33 +522,16 @@ pub fn patch_workbench(paths: &IdePaths) -> io::Result<InjectStatus> {
 
 pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
     let mut src = std::fs::read_to_string(wb)?;
-    let mut errs = Vec::new();
-    let pm = match patch_pm_token(&mut src) {
-        Ok(v) => v,
-        Err(e) => {
-            errs.push(e);
-            false
-        }
-    };
-    let reload_cmd = patch_reload_command(&mut src);
-    let neutralized = neutralize_pid_pins(&mut src);
     let already_cmd = src.contains(TSW_CMD_FLAG);
     let already_ret = src.contains(TSW_WRET_FLAG);
-    let already_ws = src.contains(TSW_WS_FLAG);
+    let already_pid = src.contains(TSW_PID_FLAG);
     let already_aic = src.contains(TSW_AIC_FLAG);
     let already_rpc = src.contains(TSW_RPC_FLAG);
-    if !pm
-        && !reload_cmd
-        && !neutralized
-        && already_cmd
-        && already_ret
-        && already_ws
-        && already_aic
-        && already_rpc
-    {
+    if already_cmd && already_ret && already_pid && already_aic && already_rpc {
         return Ok(InjectStatus::AlreadyPatched);
     }
     ensure_bak(wb)?;
+    let mut errs = Vec::new();
     if !already_cmd {
         if let Err(e) = patch_register_command(&mut src) {
             errs.push(e);
@@ -723,7 +542,7 @@ pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
             errs.push(e);
         }
     }
-    if !already_ws {
+    if !already_pid {
         if let Err(e) = patch_pid_workbench(&mut src) {
             errs.push(e);
         }
@@ -774,61 +593,12 @@ fn find_register_anchor(src: &str) -> Result<(String, String, usize), String> {
     Ok((caller, token.to_string(), after + ti + anchor_tail.len()))
 }
 
-const TSW_RESTART_AGENT_FLAG: &str = "__TSW_RESTART_AGENT__";
-const CMD_BASE: &str = "refreshUserInfo({__TSW_REPLACE__:true,device:p.device,userInfo:p.userInfo})";
-const CMD_SUFFIX: &str = r#"/*__TSW_RESTART_AGENT__*/.then(function(r){setTimeout(function(){try{var __pm=i.get(globalThis.__tsw_pm_token);if(__pm&&typeof __pm.restartAiAgent==="function")__pm.restartAiAgent();}catch(_){}setTimeout(function(){try{i.executeCommand("workbench.action.reloadWindow")}catch(_){}},5000);return r;})/*__TSW_CMD__*/"#;
-
-const TSW_PM_FLAG: &str = "/*__TSW_PM__*/";
-
-/// 暴露 IProcessManagerAgentService 的服务标识，供 _tsw.replaceUserInfo 重启 ai-agent。
-fn patch_pm_token(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_PM_FLAG) {
-        return Ok(false);
-    }
-    let needle = "ge(\"IProcessManagerAgentService\")";
-    let Some(pos) = src.find(needle) else {
-        return Err("特征锚未命中：IProcessManagerAgentService".into());
-    };
-    let Some(eq) = src[..pos].rfind('=') else {
-        return Err("服务标识赋值形态异常".into());
-    };
-    let Some((_, name)) = ident_before(src.as_bytes(), eq) else {
-        return Err("服务标识变量名解析失败".into());
-    };
-    let Some(rel) = src[pos..].find(';') else {
-        return Err("服务标识语句未闭合".into());
-    };
-    let at = pos + rel + 1;
-    src.insert_str(at, &format!("globalThis.__tsw_pm_token={name};{TSW_PM_FLAG}"));
-    Ok(true)
-}
-
-/// 换号后重启 ai-agent 进程：agent 进程仍持有旧账号的连接凭据，只重载渲染窗口不会重连；
-/// 先重启 agent，再重载窗口，聊天服务按新账号重新初始化。
-fn patch_reload_command(src: &mut String) -> bool {
-    if src.contains(TSW_RESTART_AGENT_FLAG) {
-        return false;
-    }
-    let Some(base) = src.find(CMD_BASE) else {
-        return false;
-    };
-    let after = base + CMD_BASE.len();
-    let Some(rel) = src[after..].find("/*__TSW_CMD__*/") else {
-        return false;
-    };
-    let end = after + rel + "/*__TSW_CMD__*/".len();
-    src.replace_range(after..end, CMD_SUFFIX);
-    true
-}
-
 /// ④ 命令注册：锚 X.registerCommand("icube.common.refreshUserInfo",async function(i,e){await i.get(Y).refreshUserInfo(!0)})
 fn patch_register_command(src: &mut String) -> Result<(), String> {
     let (caller, token, anchor_end) = find_register_anchor(src)?;
-    let template = r#",__CALLER__.registerCommand("_tsw.replaceUserInfo",async function(i,payload){const p=payload&&typeof payload==="object"&&payload.userInfo?payload:{userInfo:payload};return await i.get(__TOKEN__).refreshUserInfo({__TSW_REPLACE__:true,device:p.device,userInfo:p.userInfo})__SUFFIX__})"#;
-    let insertion = template
-        .replace("__CALLER__", &caller)
-        .replace("__TOKEN__", &token)
-        .replace("__SUFFIX__", CMD_SUFFIX);
+    let insertion = format!(
+        ",{caller}.registerCommand(\"_tsw.replaceUserInfo\",async function(i,payload){{const p=payload&&typeof payload===\"object\"&&payload.userInfo?payload:{{userInfo:payload}};return await i.get({token}).refreshUserInfo({{__TSW_REPLACE__:true,device:p.device,userInfo:p.userInfo}}){TSW_CMD_FLAG}}})"
+    );
     src.insert_str(anchor_end, &insertion);
     Ok(())
 }
@@ -875,7 +645,7 @@ let c=globalThis.__tsw_ai;
 if(!c){for(let __i=0;__i<24&&!c;__i++){await new Promise(__r=>setTimeout(__r,250));c=globalThis.__tsw_ai;}}
 if(!c)return{ok:false,error:"agent RPC 客户端未就绪（请先在 Trae 内打开一次 AI 侧栏或发起一次对话）"};
 const ctx=p.context&&typeof p.context==="object"?p.context:{};
-if(!ctx.project_id&&p.data&&typeof p.data.project_id==="string")ctx.project_id=p.data.project_id;
+if(!ctx.project_id){try{const __v=localStorage.getItem("__tsw_project_id");if(__v)ctx.project_id=__v;}catch(__e){}}
 const resp=await c.request({service:p.service,method:p.method,data:p.data||{},context:ctx});
 let json;try{json=JSON.stringify(resp);}catch(__e){json=String(resp);}
 return{ok:true,json:json};
@@ -996,7 +766,7 @@ fn file_mtime_ms(p: &std::path::Path) -> Option<u64> {
         .map(|d| d.as_millis() as u64)
 }
 
-/// (TSW 六补丁是否齐全, 旧 project_id 固定补丁是否仍在, 补丁落盘时刻)
+/// (TSW 六补丁是否齐全, 会话归属补丁是否落盘, 补丁落盘时刻)
 fn patch_state(paths: &IdePaths) -> (bool, bool, u64) {
     let key = paths.install_dir.to_string_lossy().to_string();
     let main_m = file_mtime_ms(&paths.main_js()).unwrap_or(0);
@@ -1033,11 +803,15 @@ fn scan_tsw_patched(paths: &IdePaths) -> bool {
             .unwrap_or(false)
 }
 
-/// 跨号会话补丁是否已安装（本地列表合并 + 发送项目替换）
+/// 会话/任务记录归属补丁是否落盘（workbench + ai-modules-chat 双处）
 fn scan_chat_pinned(paths: &IdePaths) -> bool {
-    std::fs::read_to_string(paths.chat_module_js())
-        .map(|s| s.contains(TSW_MERGE_FLAG) && s.contains(TSW_SEND_PID_V3_FLAG))
-        .unwrap_or(false)
+    let wb = std::fs::read_to_string(paths.workbench_js())
+        .map(|s| s.contains(TSW_PID_FLAG))
+        .unwrap_or(false);
+    let chat = std::fs::read_to_string(paths.chat_module_js())
+        .map(|s| s.contains(TSW_PID_FLAG))
+        .unwrap_or(false);
+    wb && chat
 }
 
 /// 会话归属补丁状态（GUI 展示用）
@@ -1073,69 +847,7 @@ pub fn patch_all(paths: &IdePaths) -> io::Result<String> {
             "会话记录归属失败（见日志）"
         }
     };
-    // 共享进程守卫：换号热路径的 setI18nApiHostByUserInfo 未捕获异常会打断
-    // ai-agent 服务初始化（服务启动异常），独立降级不影响主链路
-    let sp_note = match paths.main_js().parent().map(|p| {
-        p.join("vs/code/electron-utility/sharedProcess/sharedProcessMain.js")
-    }) {
-        Some(shared_js) => match patch_shared_guard(&shared_js) {
-            Ok(true) => "共享进程守卫",
-            Ok(false) => "共享进程守卫（已装）",
-            Err(e) => {
-                crate::core::logger::log(
-                    crate::core::logger::Level::Warn,
-                    crate::core::logger::Source::System,
-                    format!("共享进程守卫未生效（服务启动异常风险）: {e}"),
-                );
-                "共享进程守卫失败（见日志）"
-            }
-        },
-        None => "共享进程守卫跳过",
-    };
-    Ok(format!("无感换号支持安装完成：__sw 桥 + 无感换号 handler + workbench 命令 + {chat_note} + {sp_note}"))
-}
-
-pub const SPGUARD_MARKER: &str = "/*__SW_SPGUARD__*/";
-/// sharedProcessMain 双保险：
-/// ① 接收端降级 — fromService 通道对未知方法返回 no-op 而非抛错。
-///    根因：旧注入体的 setI18nApiHostByUserInfo 深度搜索会命中 main 里的
-///    yt.toService IPC 代理（代理对任意属性访问都返回函数），调用被转发到
-///    shared process，其服务没有该方法 → `Method not found` CodeExpectedError
-///    带着跨进程堆栈回到 main 成为未处理 rejection（main.log 的
-///    "[uncaught exception in main]"），并诱发「服务启动异常」。
-/// ② 进程守卫 — 兜底吞掉残余的该异常，其余照常抛出。
-const SPGUARD_TAIL: &str = r#"/*__SW_SPGUARD__*/(function(){try{if(typeof process==="object"&&process&&typeof process.on==="function"&&!process.__swGuard){process.__swGuard=1;process.on("uncaughtException",function(e){try{if(e&&/setI18nApiHostByUserInfo/.test(String((e&&e.message)||e)))return;}catch(_){}throw e;});}}catch(_){}})();"#;
-
-/// fromService 通道的未知方法抛错点（精确文本锚，sharedProcessMain.js 内唯一）
-const SP_NOMETHOD_TARGET: &str = "throw new gn(`Method not found: ${d}`)";
-const SP_NOMETHOD_REPL: &str = "return Promise.resolve(void 0)";
-
-/// 共享进程守卫补丁（幂等；返回是否有变更落盘）
-pub fn patch_shared_guard(shared_js: &std::path::Path) -> io::Result<bool> {
-    if !shared_js.exists() {
-        return Ok(false);
-    }
-    let mut src = std::fs::read_to_string(shared_js)?;
-    let mut changed = false;
-    let bak = shared_js.with_extension("js.switcher.bak");
-    if !src.contains(SPGUARD_MARKER) {
-        if !bak.exists() {
-            std::fs::copy(shared_js, &bak)?;
-        }
-        src.push_str(SPGUARD_TAIL);
-        changed = true;
-    }
-    if src.contains(SP_NOMETHOD_TARGET) {
-        if !bak.exists() {
-            std::fs::copy(shared_js, &bak)?;
-        }
-        src = src.replace(SP_NOMETHOD_TARGET, SP_NOMETHOD_REPL);
-        changed = true;
-    }
-    if changed {
-        std::fs::write(shared_js, &src)?;
-    }
-    Ok(changed)
+    Ok(format!("无感换号支持安装完成：__sw 桥 + 无感换号 handler + workbench 命令 + {chat_note}"))
 }
 
 /// 全量卸载：优先还原原始备份（干净彻底），无备份则逐段剥离
