@@ -276,18 +276,29 @@ fn pid_pin(arg: &str) -> String {
     PID_PIN_TMPL.replace("__ARG__", arg)
 }
 
-/// ⑦ workbench：`project_id:e.context?.project_id` → 固定值表达式
+const TSW_WS_FLAG: &str = "/*__TSW_WS__*/";
+
+/// ⑦ workbench：`project_id:e.context?.project_id` → 固定值表达式；
+/// 同时把真实工作区目录暴露给聊天模块（发送时按目录解析当前账号 project）。
 fn patch_pid_workbench(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_PID_FLAG) {
-        return Ok(false);
+    let mut changed = false;
+    if !src.contains(TSW_PID_FLAG) {
+        let needle = "project_id:e.context?.project_id";
+        let pos = src.find(needle).ok_or("特征锚未命中：client_info.project_id")?;
+        let arg = "e.context?.project_id";
+        let at = pos + "project_id:".len();
+        let pinned = pid_pin(arg);
+        src.replace_range(at..at + arg.len(), &pinned);
+        changed = true;
     }
-    let needle = "project_id:e.context?.project_id";
-    let pos = src.find(needle).ok_or("特征锚未命中：client_info.project_id")?;
-    let arg = "e.context?.project_id";
-    let at = pos + "project_id:".len();
-    let pinned = pid_pin(arg);
-    src.replace_range(at..at + arg.len(), &pinned);
-    Ok(true)
+    if !src.contains(TSW_WS_FLAG) {
+        let anchor = "workspace_folder:m,";
+        let pos = src.find(anchor).ok_or("特征锚未命中：workspace_folder")?;
+        let replacement = "workspace_folder:(globalThis.__tsw_ws_folder=m,(function(){try{if(m&&typeof localStorage!==\"undefined\")localStorage.setItem(\"__tsw_ws_folder\",m)}catch(_){}})(),m),/*__TSW_WS__*/";
+        src.replace_range(pos..pos + anchor.len(), replacement);
+        changed = true;
+    }
+    Ok(changed)
 }
 
 /// ⑧ ai-modules-chat：`_projectStore.actions.setProjectId(<o>.project_id,<o>.real_project_id)`
@@ -336,7 +347,7 @@ if(!__tsw_m||typeof __tsw_m!=="object")throw new Error("发送请求无效，已
 if(!globalThis.__tsw_ai||typeof globalThis.__tsw_ai.request!=="function")throw new Error("当前账号项目服务未就绪，已停止发送");
 let __tsw_s=null;try{__tsw_s=this.sessionStore&&this.sessionStore.sessionById&&this.sessionStore.sessionById.get?this.sessionStore.sessionById.get(h):null;}catch(__tsw_e){}
 const __tsw_src=(__tsw_s&&__tsw_s.source)||__tsw_m.source||{};
-const __tsw_f=(__tsw_s&&(__tsw_s.mainFolder||__tsw_s.main_folder))||__tsw_src.local_folder||__tsw_src.remote_folder||(__tsw_s&&__tsw_s.worktreeData&&__tsw_s.worktreeData.worktreePath)||(__tsw_m.workspace_folders&&__tsw_m.workspace_folders[0])||__tsw_m.workspace_folder||"";
+const __tsw_f=(__tsw_s&&(__tsw_s.mainFolder||__tsw_s.main_folder))||__tsw_src.local_folder||__tsw_src.remote_folder||(__tsw_s&&__tsw_s.worktreeData&&__tsw_s.worktreeData.worktreePath)||globalThis.__tsw_ws_folder||(typeof localStorage!=="undefined"?localStorage.getItem("__tsw_ws_folder")||"":"")||(__tsw_m.workspace_folders&&__tsw_m.workspace_folders[0])||__tsw_m.workspace_folder||"";
 if(!__tsw_f)throw new Error("无法定位会话工作区，已停止发送");
 const __tsw_data={project_kind:"workspace",workspace_type:"single_root",single_root_workspace_folder:__tsw_f,workspace_folders:[__tsw_f]};
 const __tsw_r=await globalThis.__tsw_ai.request({service:"lite",method:"get_or_create_project_v2",data:__tsw_data,context:{}});
