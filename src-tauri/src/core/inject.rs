@@ -1096,28 +1096,46 @@ pub fn patch_all(paths: &IdePaths) -> io::Result<String> {
 }
 
 pub const SPGUARD_MARKER: &str = "/*__SW_SPGUARD__*/";
-/// sharedProcessMain 守卫：换号热路径上 shared process 会调用主进程未注册的
-/// `setI18nApiHostByUserInfo` handler（CodeExpectedError: Method not found），
-/// 该未捕获异常会打断 ai-agent 服务初始化（健康检查超时 →「服务启动异常」）。
-/// 白名单吞掉该已知良性异常，其余异常照常抛出。
+/// sharedProcessMain 双保险：
+/// ① 接收端降级 — fromService 通道对未知方法返回 no-op 而非抛错。
+///    根因：旧注入体的 setI18nApiHostByUserInfo 深度搜索会命中 main 里的
+///    yt.toService IPC 代理（代理对任意属性访问都返回函数），调用被转发到
+///    shared process，其服务没有该方法 → `Method not found` CodeExpectedError
+///    带着跨进程堆栈回到 main 成为未处理 rejection（main.log 的
+///    "[uncaught exception in main]"），并诱发「服务启动异常」。
+/// ② 进程守卫 — 兜底吞掉残余的该异常，其余照常抛出。
 const SPGUARD_TAIL: &str = r#"/*__SW_SPGUARD__*/(function(){try{if(typeof process==="object"&&process&&typeof process.on==="function"&&!process.__swGuard){process.__swGuard=1;process.on("uncaughtException",function(e){try{if(e&&/setI18nApiHostByUserInfo/.test(String((e&&e.message)||e)))return;}catch(_){}throw e;});}}catch(_){}})();"#;
 
-/// 共享进程守卫补丁（幂等；返回是否新装）
+/// fromService 通道的未知方法抛错点（精确文本锚，sharedProcessMain.js 内唯一）
+const SP_NOMETHOD_TARGET: &str = "throw new gn(`Method not found: ${d}`)";
+const SP_NOMETHOD_REPL: &str = "return Promise.resolve(void 0)";
+
+/// 共享进程守卫补丁（幂等；返回是否有变更落盘）
 pub fn patch_shared_guard(shared_js: &std::path::Path) -> io::Result<bool> {
     if !shared_js.exists() {
         return Ok(false);
     }
     let mut src = std::fs::read_to_string(shared_js)?;
-    if src.contains(SPGUARD_MARKER) {
-        return Ok(false);
-    }
+    let mut changed = false;
     let bak = shared_js.with_extension("js.switcher.bak");
-    if !bak.exists() {
-        std::fs::copy(shared_js, &bak)?;
+    if !src.contains(SPGUARD_MARKER) {
+        if !bak.exists() {
+            std::fs::copy(shared_js, &bak)?;
+        }
+        src.push_str(SPGUARD_TAIL);
+        changed = true;
     }
-    src.push_str(SPGUARD_TAIL);
-    std::fs::write(shared_js, &src)?;
-    Ok(true)
+    if src.contains(SP_NOMETHOD_TARGET) {
+        if !bak.exists() {
+            std::fs::copy(shared_js, &bak)?;
+        }
+        src = src.replace(SP_NOMETHOD_TARGET, SP_NOMETHOD_REPL);
+        changed = true;
+    }
+    if changed {
+        std::fs::write(shared_js, &src)?;
+    }
+    Ok(changed)
 }
 
 /// 全量卸载：优先还原原始备份（干净彻底），无备份则逐段剥离
