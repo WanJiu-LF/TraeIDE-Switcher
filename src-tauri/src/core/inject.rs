@@ -334,6 +334,9 @@ const SUB_CTX_NEW: &str = r#"{service:"chat",method:"subscribe",params:{chat_ses
 
 /// 回滚 0.1.19~0.1.23 的发送项目替换与 context 覆盖，恢复原始发送链路。
 fn strip_legacy_send(src: &mut String) -> bool {
+    if src.contains(TSW_SEND_PID_V3_FLAG) {
+        return false;
+    }
     let mut changed = false;
     if let Some(marker) = src.find(TSW_SEND_PID_V2_FLAG) {
         if let Some(start) = src[..marker].rfind(SEND_PID_V2_PREFIX) {
@@ -363,9 +366,10 @@ fn strip_legacy_send(src: &mut String) -> bool {
     changed
 }
 
+const TSW_MERGE_V3_FLAG: &str = "__TSW_MERGE_V3__";
 const SESSION_MERGE_ANCHOR: &str = "o.sessionDomainService.batchSetSessions(u);";
-const SESSION_MERGE_CODE: &str = r#"u=(function(__u,__p){try{/*__TSW_MERGE__*/
-var __K="__tsw_session_snapshot_v2",__W=String(globalThis.__tsw_ws_folder||"").split("\\").join("/").toLowerCase(),__C=[];
+const SESSION_MERGE_CODE: &str = r#"u=(function(__u,__p){try{/*__TSW_MERGE__*//*__TSW_MERGE_V3__*/
+var __K="__tsw_session_snapshot_v3",__W=String(globalThis.__tsw_ws_folder||"").split("\\").join("/").toLowerCase(),__C=[];
 try{__C=JSON.parse(localStorage.getItem(__K)||"[]")||[]}catch(__e){__C=[]}
 var __I=new Set(__u.map(function(s){return s.sessionId})),__O=__u.slice();
 for(var __j=0;__j<__C.length;__j++){var __s=__C[__j];
@@ -374,7 +378,7 @@ var __f=String(__s.mainFolder||(__s.source&&(__s.source.local_folder||__s.source
 if(__W&&__f&&__f!==__W)continue;
 var __n=Object.assign({},__s);
 __n.__tsw_owner_project=__s.__tsw_owner_project||__s.localProjectId;
-if(__p)__n.localProjectId=__p;
+__n.localProjectId=__n.__tsw_owner_project;
 __n.remoteProjectId="";__n.status="finished";__n.isCurrent=false;
 delete __n.messages;delete __n.pendingMessages;
 __O.push(__n);__I.add(__n.sessionId);}
@@ -384,13 +388,72 @@ try{localStorage.setItem(__K,JSON.stringify(__P))}catch(__e){}
 return __O;}catch(__e){return __u}})(u,e);o.sessionDomainService.batchSetSessions(u);"#;
 
 fn patch_session_merge(src: &mut String) -> Result<bool, String> {
-    if src.contains(TSW_MERGE_FLAG) {
+    if src.contains(TSW_MERGE_V3_FLAG) {
         return Ok(false);
     }
-    let Some(pos) = src.find(SESSION_MERGE_ANCHOR) else {
+    let Some(anchor_pos) = src.find(SESSION_MERGE_ANCHOR) else {
         return Err("特征锚未命中：session batchSetSessions".into());
     };
-    src.replace_range(pos..pos + SESSION_MERGE_ANCHOR.len(), SESSION_MERGE_CODE);
+    if let Some(flag) = src.find(TSW_MERGE_FLAG) {
+        let start = src[..flag]
+            .rfind("u=(function(__u,__p)")
+            .ok_or("旧会话合并起始锚未命中")?;
+        let end = flag + src[flag..].find(SESSION_MERGE_ANCHOR).ok_or("旧会话合并结束锚未命中")?
+            + SESSION_MERGE_ANCHOR.len();
+        src.replace_range(start..end, SESSION_MERGE_CODE);
+        return Ok(true);
+    }
+    src.replace_range(anchor_pos..anchor_pos + SESSION_MERGE_ANCHOR.len(), SESSION_MERGE_CODE);
+    Ok(true)
+}
+
+const TSW_SEND_PID_V3_FLAG: &str = "__TSW_SENDPID_V3__";
+const SEND_PID_V3_CODE: &str = r#"let S=ei(e),__tsw_m=eo(e);/*__TSW_SENDPID__*//*__TSW_SENDPID_V3__*/
+if(!__tsw_m||typeof __tsw_m!=="object")throw new Error("发送请求无效，已停止发送");
+if(!globalThis.__tsw_ai||typeof globalThis.__tsw_ai.request!=="function")throw new Error("当前账号项目服务未就绪，已停止发送");
+let __tsw_s=null;try{__tsw_s=this.sessionStore&&this.sessionStore.sessionById&&this.sessionStore.sessionById.get?this.sessionStore.sessionById.get(h):null;}catch(__tsw_e){}
+const __tsw_src=(__tsw_s&&__tsw_s.source)||__tsw_m.source||{};
+const __tsw_f=(__tsw_s&&(__tsw_s.mainFolder||__tsw_s.main_folder))||__tsw_src.local_folder||__tsw_src.remote_folder||(__tsw_s&&__tsw_s.worktreeData&&__tsw_s.worktreeData.worktreePath)||globalThis.__tsw_ws_folder||(typeof localStorage!=="undefined"?localStorage.getItem("__tsw_ws_folder")||"":"")||(__tsw_m.workspace_folders&&__tsw_m.workspace_folders[0])||__tsw_m.workspace_folder||"";
+if(!__tsw_f)throw new Error("无法定位会话工作区，已停止发送");
+const __tsw_data={project_kind:"workspace",workspace_type:"single_root",single_root_workspace_folder:__tsw_f,workspace_folders:[__tsw_f]};
+const __tsw_r=await globalThis.__tsw_ai.request({service:"lite",method:"get_or_create_project_v2",data:__tsw_data,context:{}});
+const __tsw_project=(r=>{let x=r;for(let i=0;i<8&&x&&typeof x==="object";i++){if(x.ok===false||x.success===false)throw new Error(x.message||x.error||"项目查询失败");if(x.code!==undefined&&String(x.code)!=="0")throw new Error(x.message||x.msg||"项目查询失败 (code "+x.code+")");if(typeof x.project_id==="string"&&x.project_id)return x;if(typeof x.json==="string"){try{x=JSON.parse(x.json);continue}catch(__e){}}if(x.data!==undefined){x=x.data;continue}break}throw new Error("项目查询响应缺少有效 ID")})(__tsw_r);
+if(typeof __tsw_project.project_id!=="string"||!/^[0-9a-f]{24}$/i.test(__tsw_project.project_id))throw new Error("当前账号项目 ID 无效，已停止发送");
+__tsw_m.project_id=__tsw_project.project_id;
+__tsw_m.project_kind="workspace";
+globalThis.__tsw_ctx_project=__tsw_project.project_id;
+let k=await this.chatApi.sendMessage(__tsw_m)"#;
+
+fn patch_send_project_v3(src: &mut String) -> Result<bool, String> {
+    if src.contains(TSW_SEND_PID_V3_FLAG) {
+        return Ok(false);
+    }
+    let Some(pos) = src.find(SEND_PID_ANCHOR) else {
+        return Err("特征锚未命中：chatApi.sendMessage(eo(e))".into());
+    };
+    src.replace_range(pos..pos + SEND_PID_ANCHOR.len(), SEND_PID_V3_CODE);
+    Ok(true)
+}
+
+fn patch_send_context(src: &mut String) -> Result<bool, String> {
+    if src.contains(TSW_SEND_CTX_FLAG) {
+        return Ok(false);
+    }
+    let Some(pos) = src.find(SEND_CTX_ANCHOR) else {
+        return Err("特征锚未命中：chat sendMessage context".into());
+    };
+    src.replace_range(pos..pos + SEND_CTX_ANCHOR.len(), SEND_CTX_CODE);
+    Ok(true)
+}
+
+fn patch_subscribe_context(src: &mut String) -> Result<bool, String> {
+    if src.contains("__TSW_SUBCTX__") {
+        return Ok(false);
+    }
+    let Some(pos) = src.find(SUB_CTX_OLD) else {
+        return Err("特征锚未命中：chat subscribe context".into());
+    };
+    src.replace_range(pos..pos + SUB_CTX_OLD.len(), SUB_CTX_NEW);
     Ok(true)
 }
 
@@ -416,6 +479,21 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
     let mut changed = neutralize_pid_pins(&mut src);
     changed |= strip_legacy_send(&mut src);
     let mut errs = Vec::new();
+    match patch_send_project_v3(&mut src) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(e) => errs.push(format!("发送项目替换失败：{e}")),
+    }
+    match patch_send_context(&mut src) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(e) => errs.push(format!("发送上下文同步失败：{e}")),
+    }
+    match patch_subscribe_context(&mut src) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(e) => errs.push(format!("订阅上下文同步失败：{e}")),
+    }
     match patch_session_merge(&mut src) {
         Ok(true) => changed = true,
         Ok(false) => {}
@@ -916,10 +994,10 @@ fn scan_tsw_patched(paths: &IdePaths) -> bool {
             .unwrap_or(false)
 }
 
-/// 本地会话合并补丁是否已安装（ai-modules-chat）
+/// 跨号会话补丁是否已安装（本地列表合并 + 发送项目替换）
 fn scan_chat_pinned(paths: &IdePaths) -> bool {
     std::fs::read_to_string(paths.chat_module_js())
-        .map(|s| s.contains(TSW_MERGE_FLAG))
+        .map(|s| s.contains(TSW_MERGE_FLAG) && s.contains(TSW_SEND_PID_V3_FLAG))
         .unwrap_or(false)
 }
 
