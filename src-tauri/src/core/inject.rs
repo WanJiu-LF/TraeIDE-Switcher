@@ -148,6 +148,21 @@ fn repair_v2_require(src: &mut String) -> bool {
     true
 }
 
+/// 移除旧注入体里对 setI18nApiHostByUserInfo 的调用：CN 3.4.4 该方法不存在，
+/// 调用会抛 CodeExpectedError 并中断热换号，导致 AI 服务启动异常。
+fn strip_bad_i18n_call(src: &mut String) -> bool {
+    let start_marker = "try{const _found=[];const _seen=new Set();";
+    let end_marker = "try{const _hInfo=";
+    let Some(start) = src.find(start_marker) else {
+        return false;
+    };
+    let Some(rel) = src[start..].find(end_marker) else {
+        return false;
+    };
+    src.replace_range(start..start + rel, "");
+    true
+}
+
 /// v2 handler 头部 marker 检测块（{PROP} = userInfo 所在属性，intl=j / CN=userContext）
 /// 逻辑移植自 windsurf_switcher 热切换 handler（实战验证版），去掉冗余日志。
 pub const TSW_V2_BODY: &str = r#"var _tsw_req=globalThis.__sw_req||(typeof require==="function"?require:null);
@@ -173,13 +188,6 @@ try{const _ahaMod=(globalThis.__sw_req||require)("electron/main");const _aha=_ah
 for(const _k of Object.getOwnPropertyNames(this)){try{const _v=this[_k];if(_v&&typeof _v==="object"&&typeof _v.getDeviceId==="function"&&typeof _v.getCommonApiParams==="function"&&remoteDid){try{_v.b=remoteDid;}catch(_){}if(!_v.__sw_prod){_v.getDeviceId=function(){return globalThis.__sw_did||remoteDid||"0";};_v.__sw_prod=1;}}}catch(_){}}
 }
 if(t.userInfo&&t.userInfo.host){
-try{const _found=[];const _seen=new Set();
-function _deep(o,d2){if(!o||typeof o!=="object"||d2>4||_seen.has(o))return;_seen.add(o);
-if(typeof o.setI18nApiHostByUserInfo==="function")_found.push(o);
-if(o instanceof Map){o.forEach(v=>_deep(v,d2+1));}else{for(const _k of Object.getOwnPropertyNames(o)){try{_deep(o[_k],d2+1);}catch(_){}}}}
-_deep(this,0);
-for(const _oas of _found){_oas._apiHost=t.userInfo.host;try{_oas.setI18nApiHostByUserInfo(t.userInfo);}catch(_e){}}
-}catch(_e){}
 try{const _hInfo=JSON.stringify({consoleHost:t.userInfo.consoleHost||"",apiHost:t.userInfo.host});
 for(const _k of Object.getOwnPropertyNames(this)){const _v=this[_k];if(_v&&typeof _v==="object"){
 if(typeof _v.setItem==="function"){try{_v.setItem("iCubeHostInfo",_hInfo);}catch(_){}}
@@ -568,8 +576,9 @@ pub fn patch_main(paths: &IdePaths) -> io::Result<InjectStatus> {
 pub fn patch_main_file(main: &std::path::Path) -> io::Result<InjectStatus> {
     let mut src = std::fs::read_to_string(main)?;
     let repaired = repair_v2_require(&mut src);
+    let stripped = strip_bad_i18n_call(&mut src);
     if src.contains(TSW_V2_FLAG) && src.contains(TSW_ICDRS_FLAG) {
-        if repaired {
+        if repaired || stripped {
             std::fs::write(main, &src)?;
             return Ok(InjectStatus::Patched);
         }
