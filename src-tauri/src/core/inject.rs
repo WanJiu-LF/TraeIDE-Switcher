@@ -131,6 +131,15 @@ const TSW_PURE_FLAG: &str = "/*__TSW_PURE__*/";
 const TSW_AIC_FLAG: &str = "/*__TSW_AIC__*/";
 /// ⑩ 注册 _tsw.chatRpc（只读 agent RPC 代理）
 const TSW_RPC_FLAG: &str = "/*__TSW_RPC__*/";
+/// ⑫ 注册 _tsw.prepareSwitch（换号前清空聊天侧 project_id 缓存）
+const TSW_PREP_FLAG: &str = "/*__TSW_PREP__*/";
+/// ⑪ 注册 _tsw.reloadAgent（换号后重建 agent 会话栈）
+///
+/// 当前代标记（第三代）：第一代只重建客户端；第二代补了进程重启但没有去抖/等健康，
+/// 连续两次换号时第二次会撞上 SIGTERM 超时 → SIGKILL，把 agent 服务打死（16:40 实测）。
+/// 第三代加了 30s 去抖 + 重启后等 3s 并轮询 startup error 再重建客户端。
+/// 装过旧代的机器靠「命令 id 定位 + 整块剥掉 + 重插」迁移（见 find_reload_block）。
+const TSW_RLD_FLAG: &str = "/*__TSW_RLD3__*/";
 
 /// 旧版注入体遗留的裸 require 引用：main.js 是 ESM 入口，`require` 在 handler 作用域
 /// 未定义，该语句一执行就抛 ReferenceError，handler 未进入 marker 分支即中断——
@@ -278,6 +287,32 @@ pub const TSW_PID_FLAG: &str = "__TSW_PID__";
 
 const PID_PIN_TMPL: &str = r#"(function(_v){/*__TSW_PID__*/var _p=globalThis.__tsw_pid;if(typeof _p==="undefined"){_p=null;try{var _ls=typeof localStorage!=="undefined"?localStorage:null;if(_ls){_p=_ls.getItem("__tsw_project_id")||null;}}catch(_){}}if(_p&&/^[0-9a-f]{24}$/.test(_p))return _p;if(typeof _v==="string"&&/^[0-9a-f]{24}$/.test(_v)){globalThis.__tsw_pid=_v;try{var _l2=typeof localStorage!=="undefined"?localStorage:null;if(_l2)_l2.setItem("__tsw_project_id",_v);}catch(_){}}return _v;})(__ARG__)"#;
 
+/// ⑧ 已废弃（2026-10-25）：agent 按 (user_id, project_id) 校验项目归属，
+/// 把 project_id 钉成跨账号共享值只会让新账号查会话时 `project not found`。
+/// 现在改为「会话按账号隔离」：pin 表达式降级成原样返回（`return _v;`），不再改写 project_id。
+const TSW_PID_OFF_FLAG: &str = "/*__TSW_PID_OFF__*/";
+
+/// 把已注入的 pin 表达式就地降级成 passthrough（已打过 ⑦/⑧ 的机器靠它迁移）
+fn disable_pid_pin(src: &mut String) -> bool {
+    if src.contains(TSW_PID_OFF_FLAG) {
+        return false;
+    }
+    let mut changed = false;
+    let mut from = 0usize;
+    while let Some(rel) = src[from..].find(TSW_PID_FLAG) {
+        // TSW_PID_FLAG 只是裸名（不带注释定界符），插入点要越过紧跟的 `*/`，
+        // 否则会把 `return _v;` 写进注释里（2026-10-25 踩过，直接让模块语法崩掉）
+        let mut at = from + rel + TSW_PID_FLAG.len();
+        if src[at..].starts_with("*/") {
+            at += 2;
+        }
+        src.insert_str(at, &format!("return _v;{TSW_PID_OFF_FLAG}"));
+        from = at + 1;
+        changed = true;
+    }
+    changed
+}
+
 fn pid_pin(arg: &str) -> String {
     PID_PIN_TMPL.replace("__ARG__", arg)
 }
@@ -326,6 +361,415 @@ fn patch_pid_chat(src: &mut String) -> Result<bool, String> {
     Ok(true)
 }
 
+/// ⑫ 聊天模块：把 project store 抓到 globalThis.__tsw_projectStore。
+///
+/// 为什么需要：换号后 store 里还留着上一个账号的 project_id，`createProject(false)` 直接返回它，
+/// 接着 `load session` 用这个 id 去查会话 —— agent 按 (user_id, project_id) 校验归属，直接
+/// `project not found`，面板就回落「服务启动异常」。换号前必须把这个缓存清掉。
+const TSW_PSTORE_FLAG: &str = "/*__TSW_PSTORE__*/";
+
+fn patch_capture_pstore(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_PSTORE_FLAG) {
+        return Ok(());
+    }
+    let anchor = "this._projectStore.actions.setIsCreatingProject(!0)";
+    let at = src
+        .find(anchor)
+        .ok_or("特征锚未命中：projectStore.setIsCreatingProject")?;
+    src.insert_str(
+        at,
+        &format!("(globalThis.__tsw_projectStore=this._projectStore){TSW_PSTORE_FLAG},"),
+    );
+    Ok(())
+}
+
+/// ⑫b 聊天模块：在 `createProject` 函数体开头抓 project store。
+///
+/// ⑫ 插在 `setIsCreatingProject` 前，而那一行在 `if(t&&!e)return` 之后。
+/// Trae 重启后 store 被 `syncProjectStores` 填上，`createProject(false)` 永远 early return，
+/// ⑫ 的捕获跑不到，换号清缓存拿不到 store。进函数就抓一次。
+const TSW_PSTORE_HEAD_FLAG: &str = "/*__TSW_PSTORE_HEAD__*/";
+
+fn patch_capture_pstore_head(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_PSTORE_HEAD_FLAG) {
+        return Ok(());
+    }
+    let anchor = "this._projectStore.actions.setIsCreatingProject(!0)";
+    let anchor_at = src
+        .find(anchor)
+        .ok_or("特征锚未命中：projectStore.setIsCreatingProject")?;
+    let needle = "createProject(";
+    let mut window = anchor_at;
+    let fn_at = loop {
+        let at = src[..window]
+            .rfind(needle)
+            .ok_or("特征锚未命中：createProject 函数头")?;
+        if anchor_at - at >= 400 {
+            return Err("createProject 距 setIsCreatingProject 过远".into());
+        }
+        // 后面必须紧跟 createProject(，且前一字节不是标识符：排除 createProjectWithTimeout / xxxcreateProject
+        let followed = src[at..].starts_with(needle);
+        let boundary = at == 0 || !is_ident_byte(src.as_bytes()[at - 1]);
+        if followed && boundary {
+            break at;
+        }
+        if at == 0 {
+            return Err("特征锚未命中：createProject 函数头".into());
+        }
+        window = at;
+    };
+    let brace_rel = src[fn_at..]
+        .find('{')
+        .filter(|&d| d > 0 && d < 40)
+        .ok_or("createProject 函数体起点未找到")?;
+    if src.as_bytes()[fn_at + brace_rel - 1] != b')' {
+        return Err("createProject 函数体起点形态异常".into());
+    }
+    src.insert_str(
+        fn_at + brace_rel + 1,
+        &format!("(globalThis.__tsw_projectStore=this._projectStore);{TSW_PSTORE_HEAD_FLAG}"),
+    );
+    Ok(())
+}
+
+/// ⑬ 聊天模块：`biz_project_id` 加用户后缀 —— 会话按账号隔离的真正实现。
+///
+/// 背景（2026-10-25 18:04 实测）：服务端 `get_or_create_project_v2` 按 `biz_project_id`
+/// （= 工作区 id）取/建项目，**不分用户**。所以去掉 ⑧ 的 pin 后，换号拿到的还是同一个
+/// project，会话列表照样混账号。真正要隔离，必须让每个账号有独立的 project：
+/// `biz_project_id: t` → `biz_project_id: t + "__tsw_u_" + userId`。
+/// 代价：各账号旧会话（挂在原共享 project 下）不再可见。
+const TSW_PIDSALT_FLAG: &str = "/*__TSW_PIDSALT__*/";
+
+fn patch_salt_biz_pid(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_PIDSALT_FLAG) {
+        return Ok(());
+    }
+    let mut n = 0usize;
+    // prepareProjectData：user 变量名 e；createProjectForWorkspaceMigration：user 变量名 i
+    for (pat, user) in [
+        ("biz_project_id:t,user_id:e.userId", "e"),
+        ("biz_project_id:t,user_id:i.userId", "i"),
+    ] {
+        if let Some(at) = src.find(pat) {
+            let salted = format!("biz_project_id:t+\"__tsw_u_\"+{user}.userId{TSW_PIDSALT_FLAG},user_id:{user}.userId");
+            let end = at + "biz_project_id:t".len();
+            src.replace_range(at..end, &salted[..salted.find(",user_id").unwrap()]);
+            n += 1;
+        }
+    }
+    if n == 0 {
+        return Err("特征锚未命中：biz_project_id 构造点".into());
+    }
+    Ok(())
+}
+
+/// ⑭ 聊天模块：`initChatView` 撞上可恢复错误时自动重试（v2）。
+///
+/// 换号后面板立刻按新 userId 重跑 initChatView，而 agent（CKG）要按新账号重拉 boot config，
+/// 这段空窗（2026-10-26 16:23 实测约 4s）里 getSessions 返回 503 boot_config_not_ready。
+/// 另外 `createProject(false)` 会返回缓存的旧账号 project_id，createSession 报 `project not found`。
+/// 重试改为 `initChatView(true)`，强制 `createProject(true)` 绕过缓存；`project not found` 同样可恢复。
+/// 原版 catch 只把错误挂到面板上且不重试。重试期间直接 return，跳过之后的 `setLoading(false)`，
+/// 面板保持加载态而不是错误态。
+const TSW_INITRETRY_FLAG: &str = "/*__TSW_INITRETRY__*/";
+const TSW_INITRETRY2_FLAG: &str = "/*__TSW_INITRETRY2__*/";
+const INIT_RETRY_MAX: u32 = 8;
+const INIT_RETRY_DELAY_MS: u32 = 1500;
+
+fn patch_init_retry(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_INITRETRY2_FLAG) {
+        return Ok(());
+    }
+    if src.contains(TSW_INITRETRY_FLAG) {
+        let flag_at = src.find(TSW_INITRETRY_FLAG).ok_or("v1 重试标记定位失败")?;
+        let v1_head = "if(/boot_config_not_ready/.test(String(";
+        let v1_at = src[..flag_at]
+            .rfind(v1_head)
+            .ok_or("v1 重试片段起始未找到")?;
+        src.replace_range(v1_at..flag_at + TSW_INITRETRY_FLAG.len(), "");
+    }
+    // initChatView 本体：`<fn>=(0,<x>.A)(async(e=!1)=>{…<log>.info("[ai-chat] initChatView loggedIn:"`
+    let login_log = src
+        .find("\"[ai-chat] initChatView loggedIn:\"")
+        .ok_or("特征锚未命中：initChatView loggedIn")?;
+    let head_at = src[..login_log]
+        .rfind("(async(")
+        .filter(|&p| login_log - p < 400)
+        .ok_or("特征锚未命中：initChatView 函数头")?;
+    let wrap_at = src[..head_at]
+        .rfind("=(0,")
+        .filter(|&p| head_at - p < 40)
+        .ok_or("特征锚未命中：initChatView 包装")?;
+    let (_, init_fn) = ident_before(src.as_bytes(), wrap_at).ok_or("initChatView 函数名解析失败")?;
+
+    // 成功出口：`,<log>.info("[ai-chat] initChatView load session done")` 前清零计数
+    let done_anchor = ".info(\"[ai-chat] initChatView load session done\")";
+    let done_at = src.find(done_anchor).ok_or("特征锚未命中：initChatView load session done")?;
+    let (done_start, _) = ident_before(src.as_bytes(), done_at).ok_or("load session done 日志对象解析失败")?;
+    if !matches!(src.as_bytes()[done_start - 1], b',' | b';' | b'{') {
+        return Err("load session done 前缀形态异常".into());
+    }
+
+    // 失败出口：catch 里的 `<log>.error("[ai-chat] initChatView error:",<err>)`
+    let err_anchor = ".error(\"[ai-chat] initChatView error:\",";
+    let err_at = src.find(err_anchor).ok_or("特征锚未命中：initChatView error")?;
+    let (err_start, logger) = ident_before(src.as_bytes(), err_at).ok_or("initChatView error 日志对象解析失败")?;
+    // 要插入的是 if 语句，前面必须是语句边界
+    if !matches!(src.as_bytes()[err_start - 1], b';' | b'{' | b'}') {
+        return Err("initChatView error 前缀形态异常".into());
+    }
+    let arg_at = err_at + err_anchor.len();
+    let err_var = src[arg_at..]
+        .find(')')
+        .map(|n| &src[arg_at..arg_at + n])
+        .filter(|v| !v.is_empty() && v.bytes().all(is_ident_byte))
+        .ok_or("initChatView error 参数形态异常")?
+        .to_string();
+    if done_start > err_start {
+        return Err("initChatView 成功/失败出口顺序异常".into());
+    }
+
+    let retry = format!(
+        "if(/boot_config_not_ready|project not found/.test(String({err_var}))){{let __n=(globalThis.__tsw_initRetry||0)+1;\
+if(__n<={INIT_RETRY_MAX}){{globalThis.__tsw_initRetry=__n;\
+{logger}.warn(\"[ai-chat] initChatView recoverable error, tsw retry\",__n,String({err_var}).slice(0,120));\
+setTimeout(()=>{{{init_fn}(!0)}},{INIT_RETRY_DELAY_MS});return}}globalThis.__tsw_initRetry=0}}{TSW_INITRETRY2_FLAG}"
+    );
+    let reset_done = src.contains("globalThis.__tsw_initRetry=0,");
+    src.insert_str(err_start, &retry);
+    if !reset_done {
+        src.insert_str(done_start, "globalThis.__tsw_initRetry=0,");
+    }
+    Ok(())
+}
+
+/// ⑭ 失败只降级：重试补丁缺失时面板仍是原版行为，不应连累会话归属补丁落盘
+fn try_patch_init_retry(src: &mut String) -> bool {
+    match patch_init_retry(src) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::core::logger::log(
+                crate::core::logger::Level::Warn,
+                crate::core::logger::Source::System,
+                format!("换号后聊天面板自动重试未生效（面板可能停在「服务启动异常」，手点重试即可）: {e}"),
+            );
+            false
+        }
+    }
+}
+
+/// ⑮ 聊天模块：v2 会话服务把 503 / boot_config_not_ready 视为可重试。
+///
+/// v2 通用重试把带正整数 code 的错误判为不可重试，换号后 boot config 空窗的 503 因此直接失败、
+/// 面板「服务启动异常」。改为 503 / boot_config_not_ready 可重试，沿用原有 1s×10 次。
+const TSW_V2RETRY_FLAG: &str = "/*__TSW_V2RETRY__*/";
+
+fn patch_v2_retry_503(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_V2RETRY_FLAG) {
+        return Ok(());
+    }
+    let anchor = "failed without retry`";
+    let at = src
+        .find(anchor)
+        .ok_or("特征锚未命中：v2 SessionListService failed without retry")?;
+    let mut lookback = at.saturating_sub(80);
+    while lookback < at && !src.is_char_boundary(lookback) {
+        lookback += 1;
+    }
+    if !src[lookback..at].contains("[ai-chat/v2][SessionListService]") {
+        return Err("特征锚未命中：v2 SessionListService failed without retry".into());
+    }
+    let head = "if(!function(";
+    let fn_at = src[..at]
+        .rfind(head)
+        .ok_or("特征锚未命中：v2 可重试判定 if(!function(")?;
+    if at - fn_at >= 300 {
+        return Err("v2 可重试判定距 failed without retry 过远".into());
+    }
+    let param_from = fn_at + head.len();
+    let paren = src[param_from..]
+        .find(')')
+        .ok_or("v2 可重试判定函数形参形态异常")?;
+    let param = src[param_from..param_from + paren].to_string();
+    if param.is_empty() || !param.bytes().all(is_ident_byte) {
+        return Err("v2 可重试判定函数形参形态异常".into());
+    }
+    let brace_at = param_from + paren + 1;
+    if src.as_bytes().get(brace_at) != Some(&b'{') {
+        return Err("v2 可重试判定函数体起点形态异常".into());
+    }
+    let insert_at = brace_at + 1;
+    let mut window_end = (insert_at + 120).min(src.len());
+    while window_end > insert_at && !src.is_char_boundary(window_end) {
+        window_end -= 1;
+    }
+    if !src[insert_at..window_end].contains("\"code\"in ") {
+        return Err("v2 可重试判定函数形态异常：缺少 \"code\"in".into());
+    }
+    let snippet = format!(
+        "if({param}&&({param}.code===503||/boot_config_not_ready/.test(String({param}.message||\"\"))))return!0;{TSW_V2RETRY_FLAG}"
+    );
+    src.insert_str(insert_at, &snippet);
+    Ok(())
+}
+
+/// ⑮ 失败只降级：v2 503 重试缺失时仍保留其余会话补丁
+fn try_patch_v2_retry_503(src: &mut String) -> bool {
+    match patch_v2_retry_503(src) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::core::logger::log(
+                crate::core::logger::Level::Warn,
+                crate::core::logger::Source::System,
+                format!("v2 会话服务 503 重试未生效（换号后 boot config 空窗的 503 可能直接失败，面板停在「服务启动异常」）: {e}"),
+            );
+            false
+        }
+    }
+}
+
+/// ⑯ 聊天模块：v2 用新账号初始化换号前打开的旧会话时，不把「session not found」钉成错误页。
+///
+/// 旧版 `loadPreviousSessionOrCreateNewIfNeeded` 在 v2 开启时只写旧 store，不调用 `switchToSession`；
+/// solo 视图的当前会话来自路由。catch 里 `setInitError` 会让该会话一直渲染错误页（刷新/重启服务）。
+/// 这条错误说明会话不属于当前账号：清掉 initError、本地卸掉该会话（不打服务端删除），
+/// 再走 NavigatePort.navigateHomePage 离开它。其它错误仍原样 `setInitError` 并 throw。
+const TSW_V2NOTFOUND_FLAG: &str = "/*__TSW_V2NOTFOUND__*/";
+
+fn patch_v2_session_not_found(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_V2NOTFOUND_FLAG) {
+        return Ok(());
+    }
+    let anchor = "[ChatSessionService] Session init error (Lite):";
+    let at = src
+        .find(anchor)
+        .ok_or("特征锚未命中：Session init error (Lite)")?;
+    if src[at + anchor.len()..].contains(anchor) {
+        return Err("Session init error (Lite) 锚出现多次".into());
+    }
+    if at == 0 || src.as_bytes()[at - 1] != b'"' {
+        return Err("Lite 错误日志锚形态异常".into());
+    }
+    let fn_at = src[..at]
+        .rfind("async initSessionForSoloLite(")
+        .ok_or("特征锚未命中：async initSessionForSoloLite")?;
+    if at - fn_at > 12_000 {
+        return Err("Lite init catch 距 initSessionForSoloLite 过远".into());
+    }
+    let win_start = at.saturating_sub(180);
+    let catch_rel = src[win_start..at]
+        .rfind("catch(")
+        .ok_or("特征锚未命中：Lite init catch(")?;
+    let err_from = win_start + catch_rel + "catch(".len();
+    let (mut pos, err_var) = take_ident(src, err_from, "Lite init catch 形参")?;
+    pos = expect_lit(src, pos, "){if(!")?;
+    let (pred_end, pred) = take_ident(src, pos, "Lite init shouldCommit")?;
+    pos = expect_lit(src, pred_end, "())return;")?;
+    let (log_end, _logger) = take_ident(src, pos, "Lite init logger")?;
+    pos = expect_lit(src, log_end, ".logger.error(\"")?;
+    if pos != at {
+        return Err("Lite init logger.error 与错误锚不连续".into());
+    }
+    pos = expect_lit(src, at + anchor.len(), "\",")?;
+    pos = expect_lit(src, pos, &err_var)?;
+    pos = expect_lit(src, pos, ");let ")?;
+    let (msg_end, msg) = take_ident(src, pos, "Lite init 错误消息变量")?;
+    pos = expect_lit(
+        src,
+        msg_end,
+        &format!("={err_var} instanceof Error?{err_var}.message:\"Unknown error\","),
+    )?;
+    let (code_end, code) = take_ident(src, pos, "Lite init 错误码变量")?;
+    let throw_at = expect_lit(src, code_end, &format!("={err_var}?.code;"))?;
+    pos = expect_lit(src, throw_at, "throw ")?;
+    let set_key = ".setInitError(";
+    let set_rel = src[pos..]
+        .find(set_key)
+        .filter(|&d| d > 0 && d < 80)
+        .ok_or("Lite init setInitError 形态异常")?;
+    let recv = src[pos..pos + set_rel].to_string();
+    if !is_member_expr(&recv) {
+        return Err("Lite init setInitError 接收者形态异常".into());
+    }
+    pos += set_rel + set_key.len();
+    let (sid_end, sid) = take_ident(src, pos, "Lite init 会话 id")?;
+    pos = expect_lit(src, sid_end, &format!(",{{message:{msg},env:"))?;
+    let (env_end, _env) = take_ident(src, pos, "Lite init env")?;
+    expect_lit(src, env_end, &format!(",code:{code}}}),{err_var}"))?;
+    let _ = pred;
+
+    let life = "getSessionLifecyclePort(){return ";
+    let life_at = src
+        .find(life)
+        .ok_or("特征锚未命中：getSessionLifecyclePort")?;
+    if src[life_at + life.len()..].contains(life) {
+        return Err("getSessionLifecyclePort 出现多次".into());
+    }
+    if !src.contains("async deleteSession(") {
+        return Err("特征锚未命中：async deleteSession".into());
+    }
+    let (xt_end, xt) = take_ident(src, life_at + life.len(), "port registry")?;
+    let after_xt = expect_lit(src, xt_end, ".XT.tryResolve(")?;
+    let (tok_end, tok) = take_ident(src, after_xt, "port token")?;
+    let life_end = expect_lit(src, tok_end, ".F.SessionLifecycle)}")?;
+    if src.contains("tswV2Navigate(") {
+        return Err("已有 tswV2Navigate 但缺少 v2 not-found 标记".into());
+    }
+
+    let guard = format!(
+        "if(/session not found/i.test({msg})){{{recv}.clearInitError({sid});try{{await this.deleteSession({sid},!0)}}catch(__tswNf){{}}try{{this.tswV2Navigate()?.navigateHomePage?.()}}catch(__tswNf){{}}return}}{TSW_V2NOTFOUND_FLAG}"
+    );
+    let method = format!("tswV2Navigate(){{return {xt}.XT.tryResolve({tok}.F.Navigate)}}");
+    // throw 在方法定义之后：先插入 catch，方法下标才不会位移
+    if throw_at <= life_end {
+        return Err("Lite init throw 不在 getSessionLifecyclePort 之后".into());
+    }
+    src.insert_str(throw_at, &guard);
+    src.insert_str(life_end, &method);
+    Ok(())
+}
+
+/// ⑯ 失败只降级：补丁缺失时换号后旧会话可能停在「服务启动异常」，可手动新建会话
+fn try_patch_v2_session_not_found(src: &mut String) -> bool {
+    match patch_v2_session_not_found(src) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::core::logger::log(
+                crate::core::logger::Level::Warn,
+                crate::core::logger::Source::System,
+                format!("换号后旧会话可能停在「服务启动异常」，可手动新建会话: {e}"),
+            );
+            false
+        }
+    }
+}
+
+fn take_ident(src: &str, at: usize, what: &str) -> Result<(usize, String), String> {
+    let b = src.as_bytes();
+    if at >= b.len() || !is_ident_byte(b[at]) {
+        return Err(format!("{what}形态异常"));
+    }
+    let mut end = at + 1;
+    while end < b.len() && is_ident_byte(b[end]) {
+        end += 1;
+    }
+    Ok((end, src[at..end].to_string()))
+}
+
+fn expect_lit(src: &str, at: usize, lit: &str) -> Result<usize, String> {
+    if src[at..].starts_with(lit) {
+        Ok(at + lit.len())
+    } else {
+        Err(format!("形态异常：未遇到 {lit}"))
+    }
+}
+
+fn is_member_expr(s: &str) -> bool {
+    !s.is_empty()
+        && s.split('.').all(|p| !p.is_empty() && p.bytes().all(is_ident_byte))
+}
+
 fn ensure_bak_named(file: &std::path::Path) -> io::Result<()> {
     let name = file.file_name().unwrap_or_default().to_string_lossy().to_string();
     let bak = file.with_file_name(format!("{name}.switcher.bak"));
@@ -345,11 +789,49 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
         return Err(io::Error::new(io::ErrorKind::NotFound, "未找到 ai-modules-chat 模块"));
     }
     let mut src = std::fs::read_to_string(chat)?;
-    if src.contains(TSW_PID_FLAG) {
+    let pid_done = src.contains(TSW_PID_FLAG);
+    let store_done = src.contains(TSW_PSTORE_FLAG);
+    if pid_done && store_done {
+        let mut dirty = disable_pid_pin(&mut src);
+        // ⑬（biz_project_id 加盐）是后来加的，老注入体要补
+        if !src.contains(TSW_PIDSALT_FLAG) {
+            patch_salt_biz_pid(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+            dirty = true;
+        }
+        if !src.contains(TSW_PSTORE_HEAD_FLAG) {
+            patch_capture_pstore_head(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+            dirty = true;
+        }
+        if !src.contains(TSW_INITRETRY2_FLAG) && try_patch_init_retry(&mut src) {
+            dirty = true;
+        }
+        if !src.contains(TSW_V2RETRY_FLAG) && try_patch_v2_retry_503(&mut src) {
+            dirty = true;
+        }
+        if !src.contains(TSW_V2NOTFOUND_FLAG) && try_patch_v2_session_not_found(&mut src) {
+            dirty = true;
+        }
+        if dirty {
+            std::fs::write(chat, src)?;
+            return Ok(InjectStatus::Patched);
+        }
         return Ok(InjectStatus::AlreadyPatched);
     }
     ensure_bak_named(chat)?;
-    patch_pid_chat(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    if pid_done {
+        // ⑧ 已废弃：把旧的钉值表达式降级成 passthrough
+        disable_pid_pin(&mut src);
+    } else {
+        patch_pid_chat(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    }
+    // 换号要能清掉聊天侧缓存的 project_id，先把 project store 抓到 globalThis
+    patch_capture_pstore(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    patch_capture_pstore_head(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    // ⑬ biz_project_id 按用户加盐（会话按账号隔离）
+    patch_salt_biz_pid(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    try_patch_init_retry(&mut src);
+    try_patch_v2_retry_503(&mut src);
+    try_patch_v2_session_not_found(&mut src);
     std::fs::write(chat, src)?;
     Ok(InjectStatus::Patched)
 }
@@ -527,7 +1009,21 @@ pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
     let already_pid = src.contains(TSW_PID_FLAG);
     let already_aic = src.contains(TSW_AIC_FLAG);
     let already_rpc = src.contains(TSW_RPC_FLAG);
-    if already_cmd && already_ret && already_pid && already_aic && already_rpc {
+    let already_rld = src.contains(TSW_RLD_FLAG);
+    let already_prep = src.contains(TSW_PREP_FLAG);
+    if already_cmd
+        && already_ret
+        && already_pid
+        && already_aic
+        && already_rpc
+        && already_rld
+        && already_prep
+    {
+        // ⑧ 已废弃：老机器上把钉值表达式降级成 passthrough
+        if disable_pid_pin(&mut src) {
+            std::fs::write(wb, src)?;
+            return Ok(InjectStatus::Patched);
+        }
         return Ok(InjectStatus::AlreadyPatched);
     }
     ensure_bak(wb)?;
@@ -548,14 +1044,23 @@ pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
         }
     }
     // 会话用量链路：客户端暴露 + RPC 代理命令（结构面变动只降级，不影响热换号）
-    if !already_aic {
-        if let Err(e) = patch_ai_client(&mut src) {
-            errs.push(format!("agent 客户端暴露失败：{e}"));
-        }
+    // 无条件调用：已打过 ⑨ 的旧注入体需要补宿主 capture（换号后重建客户端）
+    if let Err(e) = patch_ai_client(&mut src) {
+        errs.push(format!("agent 客户端暴露失败：{e}"));
     }
     if !already_rpc {
         if let Err(e) = patch_register_rpc(&mut src) {
             errs.push(format!("chatRpc 命令注册失败：{e}"));
+        }
+    }
+    if !already_rld {
+        if let Err(e) = patch_register_reload(&mut src) {
+            errs.push(format!("reloadAgent 命令注册失败：{e}"));
+        }
+    }
+    if !already_prep {
+        if let Err(e) = patch_register_prepare(&mut src) {
+            errs.push(format!("prepareSwitch 命令注册失败：{e}"));
         }
     }
     if !src.contains(TSW_PURE_FLAG) {
@@ -608,6 +1113,14 @@ fn patch_register_command(src: &mut String) -> Result<(), String> {
 /// 两种发行版都命中：国际版压缩态 `this.a=await this.createClient(t)`、CN 可读态 `this._client=await this.createClient(t)`
 fn patch_ai_client(src: &mut String) -> Result<(), String> {
     if src.contains(TSW_AIC_FLAG) {
+        // 已打过 ⑨ 的旧注入体：在 initDefaultClient 方法头补一行宿主 capture
+        // （换号后重建客户端单例要用它；在方法体内按方法名定位，不依赖插入点旁的内容）
+        if !src.contains("globalThis.__tsw_aiHost") {
+            let head = "initDefaultClient(){";
+            let start = src.find(head).ok_or("特征锚未命中：initDefaultClient")?;
+            let at = start + head.len();
+            src.insert_str(at, "globalThis.__tsw_aiHost=this;");
+        }
         return Ok(());
     }
     let head = "initDefaultClient(){";
@@ -630,7 +1143,7 @@ fn patch_ai_client(src: &mut String) -> Result<(), String> {
     let field = src[field_start..at].to_string();
     src.insert_str(
         after_call,
-        &format!(",globalThis.__tsw_ai={field}{TSW_AIC_FLAG}"),
+        &format!(",globalThis.__tsw_ai={field},globalThis.__tsw_aiHost=this{TSW_AIC_FLAG}"),
     );
     Ok(())
 }
@@ -658,6 +1171,205 @@ fn patch_register_rpc(src: &mut String) -> Result<(), String> {
     let (caller, _token, anchor_end) = find_register_anchor(src)?;
     src.insert_str(anchor_end, &format!(",{caller}{RPC_REG_TMPL}"));
     Ok(())
+}
+
+/// 从 workbench 里取出 IProcessManagerAgentService 的 DI 令牌变量名。
+///
+/// 为什么不用 `workbench.action.reloadAiAgent`：那个 Action2 在 `registerProcessActions()`
+/// 里被 `this.productService.quality==="stable"||(O(VAr),O(WAr))` 短路掉了 —— stable 版
+/// （CN 3.4.4 实测）**根本没注册**，扩展宿主执行时报 command not found。
+/// 但那份实现本身还在包里：`async run(e){const t=e.get(lt),s=e.get(eoe);try{await s.restartAiAgent()`，
+/// 把 `eoe` 抠出来就能直接拿服务、走官方重启路径（channel.call(restartAiAgent) + reconnect）。
+fn pm_token_of(src: &str) -> Option<String> {
+    let at = src.find(";try{await s.restartAiAgent()")?;
+    let k = src[..at].rfind("s=e.get(")?;
+    let rest = &src[k + "s=e.get(".len()..at];
+    let end = rest.find(')')?;
+    let tok = &rest[..end];
+    let ok = !tok.is_empty()
+        && tok
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    ok.then(|| tok.to_string())
+}
+
+/// ⑪ workbench：注册 _tsw.reloadAgent —— 换号后重建 AI 会话栈。
+///
+/// 两步，顺序固定：
+///   ① 重启 agent 进程（`IProcessManagerAgentService.restartAiAgent()`，= 面板那颗「重启服务」
+///      按钮走的同一条实现），让 agent 按当前 storage.json 里的身份重新握手；
+///   ② 拆掉渲染进程的客户端单例（一次性 deferred 已 settle，不换就永远返回旧句柄）再重新 init。
+///
+/// 只做 ② 不做 ①：进程还握着旧账号的会话上下文；只做 ① 不做 ②：`getDefaultClient()` 仍是旧
+/// 客户端，会话列表/对话/任务拿到的还是旧句柄 —— 旧对话点开照样回落「服务启动异常」。
+///
+/// 字段名不写死：deferred 按形状定位（`p` 是 Promise 且带 `complete`），变更判定走宿主自己的
+/// `getDefaultClient()`；国际版压缩态客户端字段是 `this.a`，与 CN 的 `_client` 不同名。
+/// 旧客户端不 dispose（被多个服务共享，dispose 会连带打挂面板）。
+const RELOAD_TMPL: &str = r#".registerCommand("_tsw.reloadAgent",async function(__acc,__p){/*__TSW_RLD3__*/
+try{
+let __proc={ok:false,error:"未定位 agent 进程服务令牌"};
+try{
+const __pm=__acc&&typeof __acc.get==="function"?__acc.get(__PM__):null;
+if(!__pm||typeof __pm.restartAiAgent!=="function"){__proc={ok:false,error:"进程服务无 restartAiAgent（结构变动）"};}
+else{
+const __now=Date.now();
+const __last=globalThis.__tsw_lastAgentRestart||0;
+if(__now-__last<30000){
+__proc={ok:true,skipped:"30s 内刚重启过，跳过进程重启",sinceMs:__now-__last};
+}else{
+globalThis.__tsw_lastAgentRestart=__now;
+await __pm.restartAiAgent();
+__proc={ok:true};
+await new Promise(__r=>setTimeout(__r,3000));
+let __hErr="";
+for(let __i=0;__i<10;__i++){
+__hErr="";
+try{if(typeof __pm.getAiAgentProcessStartupError==="function")__hErr=(await __pm.getAiAgentProcessStartupError())||"";}catch(__e){__hErr="";}
+if(!__hErr)break;
+await new Promise(__r=>setTimeout(__r,500));
+}
+__proc.health=__hErr||"ok";
+}
+}
+}catch(__e){__proc={ok:false,error:String(__e&&__e.message||__e)};}
+const h=globalThis.__tsw_aiHost;
+if(!h||typeof h.initDefaultClient!=="function")return{ok:false,process:__proc,client:{ok:false,error:"agent 宿主未就绪（未捕获宿主对象，需重装补丁并重启 Trae）"}};
+let __k=null,__d=null;
+for(const __key of Object.keys(h)){const __v=h[__key];if(__v&&typeof __v==="object"&&__v.p&&typeof __v.p.then==="function"&&typeof __v.complete==="function"){__k=__key;__d=__v;break;}}
+if(!__k)return{ok:false,process:__proc,client:{ok:false,error:"agent 客户端 deferred 未定位（宿主结构变动，需重装补丁）"}};
+const __gc=typeof h.getDefaultClient==="function"?()=>Promise.race([Promise.resolve(h.getDefaultClient()).catch(()=>null),new Promise(__r=>setTimeout(()=>__r(null),4000))]):null;
+const __before=__gc?await __gc():null;
+h[__k]=new __d.constructor();
+try{
+await h.initDefaultClient();
+}catch(__e){
+h[__k]=__d;
+return{ok:false,process:__proc,client:{ok:false,error:"重新初始化失败：" + String(__e&&__e.message||__e)}};
+}
+const __after=__gc?await __gc():null;
+return{ok:!!__proc.ok&&(__proc.health===undefined||__proc.health==="ok"),process:__proc,client:{ok:true,rebuilt:true,deferred:__k,changed:__gc?(__before&&__after?__before!==__after:null):null,hasClient:!!__after}};
+}catch(__e){return{ok:false,error:String(__e&&__e.message||__e)}}})"#;
+
+/// ⑫ workbench：注册 _tsw.prepareSwitch —— 换号前把聊天侧缓存的 project 清掉。
+///
+/// agent 按 (user_id, project_id) 校验项目归属。换号后 store 里仍是上一个账号的 project_id 时，
+/// `createProject(false)` 会直接返回这个 id，随后 `loadPreviousSessionOrCreateNewIfNeeded()`
+/// 拿它查会话 → `project not found` → 面板「服务启动异常」。清空后 `initChatView` 会重新
+/// `get_or_create_project_v2`，拿到属于新账号的 project。
+/// 顺手清 localStorage 里的钉值，避免下一轮又把旧 id 钉回去。
+const PREP_TMPL: &str = r#".registerCommand("_tsw.prepareSwitch",async function(__acc,__p){/*__TSW_PREP__*/
+try{
+let __cleared=[];
+try{
+const __st=globalThis.__tsw_projectStore;
+if(__st&&__st.actions&&typeof __st.actions.setProjectId==="function"){
+const __cur=__st.getState?__st.getState().projectId:"";
+__st.actions.setProjectId("","");
+__cleared.push("store:"+(__cur||"(empty)"));
+}
+}catch(__e){}
+try{
+const __old=localStorage.getItem("__tsw_project_id");
+localStorage.removeItem("__tsw_project_id");
+localStorage.removeItem("__tsw_real_project_id");
+if(__old)__cleared.push("pin:"+__old);
+}catch(__e){}
+return{ok:true,cleared:__cleared,hasStore:!!globalThis.__tsw_projectStore};
+}catch(__e){return{ok:false,error:String(__e&&__e.message||__e)}}})"#;
+
+fn patch_register_prepare(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_PREP_FLAG) {
+        return Ok(());
+    }
+    let (caller, _token, anchor_end) = find_register_anchor(src)?;
+    src.insert_str(anchor_end, &format!(",{caller}{PREP_TMPL}"));
+    Ok(())
+}
+
+fn patch_register_reload(src: &mut String) -> Result<(), String> {
+    if src.contains(TSW_RLD_FLAG) {
+        return Ok(());
+    }
+    // 迁移：旧代 ⑪ 的那一段要整块剥掉，否则会留下两个同 id 的 registerCommand
+    if src.contains("registerCommand(\"_tsw.reloadAgent\"") {
+        if let Some((start, end)) = find_reload_block(src) {
+            src.replace_range(start..end, "");
+        }
+    }
+    // 令牌缺失只降级（进程重启那步会返回明确错误），不影响换号本身
+    let token = pm_token_of(src).unwrap_or_else(|| "null".to_string());
+    let (caller, _token, anchor_end) = find_register_anchor(src)?;
+    src.insert_str(
+        anchor_end,
+        &format!(",{caller}{}", RELOAD_TMPL.replace("__PM__", &token)),
+    );
+    Ok(())
+}
+
+/// 跳过 JS 字符串字面量（含转义），返回收尾引号之后的位置
+fn skip_js_string(src: &str, quote_at: usize) -> usize {
+    let b = src.as_bytes();
+    let q = b[quote_at];
+    let mut i = quote_at + 1;
+    while i < b.len() {
+        if b[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if b[i] == q {
+            return i + 1;
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// 定位 `_tsw.reloadAgent` 命令块：返回 (前面的逗号, 收尾 `)` 之后)
+fn find_reload_block(src: &str) -> Option<(usize, usize)> {
+    let at = src.find("registerCommand(\"_tsw.reloadAgent\"")?;
+    let fn_at = at + src[at..].find("async function(__acc,__p)")?;
+    let brace = fn_at + src[fn_at..].find('{')?;
+    let b = src.as_bytes();
+    let mut depth = 0usize;
+    let mut i = brace;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' | b'`' => {
+                i = skip_js_string(src, i);
+                continue;
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                i = i + src[i..].find("*/")? + 2;
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    i += 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // 函数体收尾后应紧跟 registerCommand 的 `)`
+    while i < b.len() && b[i] != b')' && b[i] != b',' && b[i] != b';' {
+        i += 1;
+    }
+    if i < b.len() && b[i] == b')' {
+        i += 1;
+    }
+    let start = src[..at].rfind(',')?;
+    Some((start, i))
 }
 
 /// ⑤ return 修复：async refreshUserInfo(e){await IPC.invoke(ENUM.SANDBOX_TO_MAIN_REFRESH_USERINFO,e)}
@@ -878,4 +1590,126 @@ pub fn unpatch_all(paths: &IdePaths) -> io::Result<String> {
         msgs.push("无可移除的无感换号支持".into());
     }
     Ok(msgs.join("，"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INIT_CHAT_VIEW: &str = r#"e6=(0,rb.A)(async(e=!1)=>{eW(!0),eG("");let t=Date.now(),r="";try{let n=await ei.getUserInfo(),i=null!=n,o=n?.userId||"";if(Z.info("[ai-chat] initChatView loggedIn:",i,"userId:",o),!i||!o){eW(!1);return}await D.loadPreviousSessionOrCreateNewIfNeeded(),await j.initialize(),Z.info("[ai-chat] initChatView load session done"),$.event({})}catch(i){let e=i?.stack||i?.message||"";if(!W.getState().loggedIn){eW(!1);return}Z.error("[ai-chat] initChatView error:",e);let{message:n}=J.getErrorInfo(1);eG(n)}eW(!1)});"#;
+
+    #[test]
+    fn init_retry_patch_is_idempotent_and_targets_init_fn() {
+        let mut src = INIT_CHAT_VIEW.to_string();
+        patch_init_retry(&mut src).unwrap();
+        assert!(src.contains("setTimeout(()=>{e6(!0)},1500);return}"));
+        assert!(src.contains("/boot_config_not_ready|project not found/.test(String(e))"));
+        assert!(src.contains("Z.warn(\"[ai-chat] initChatView recoverable error, tsw retry\""));
+        assert!(src.contains("await j.initialize(),globalThis.__tsw_initRetry=0,Z.info("));
+        assert!(src.contains(&format!("{TSW_INITRETRY2_FLAG}Z.error(\"[ai-chat] initChatView error:\"")));
+        let once = src.clone();
+        patch_init_retry(&mut src).unwrap();
+        assert_eq!(src, once);
+    }
+
+    #[test]
+    fn init_retry_patch_rejects_unknown_shape() {
+        let mut src = INIT_CHAT_VIEW.replace("initChatView error:", "initChatView failed:");
+        assert!(patch_init_retry(&mut src).is_err());
+        assert!(!src.contains(TSW_INITRETRY_FLAG));
+        assert!(!src.contains(TSW_INITRETRY2_FLAG));
+    }
+
+    #[test]
+    fn init_retry_migrates_v1_to_v2() {
+        let v1 = r#"if(/boot_config_not_ready/.test(String(e))){let __n=(globalThis.__tsw_initRetry||0)+1;if(__n<=8){globalThis.__tsw_initRetry=__n;Z.warn("[ai-chat] initChatView boot_config_not_ready, tsw retry",__n);setTimeout(()=>{e6()},1500);return}globalThis.__tsw_initRetry=0}/*__TSW_INITRETRY__*/"#;
+        let mut src = INIT_CHAT_VIEW.to_string();
+        let err_at = src.find("Z.error(\"[ai-chat] initChatView error:\"").unwrap();
+        src.insert_str(err_at, v1);
+        let done_at = src
+            .find("Z.info(\"[ai-chat] initChatView load session done\")")
+            .unwrap();
+        src.insert_str(done_at, "globalThis.__tsw_initRetry=0,");
+
+        patch_init_retry(&mut src).unwrap();
+        assert!(!src.contains(TSW_INITRETRY_FLAG));
+        assert!(!src.contains("if(/boot_config_not_ready/.test(String("));
+        assert!(!src.contains("boot_config_not_ready, tsw retry"));
+        assert!(!src.contains("e6()}"));
+        assert!(src.contains(TSW_INITRETRY2_FLAG));
+        assert!(src.contains("setTimeout(()=>{e6(!0)},1500);return}"));
+        assert!(src.contains("/boot_config_not_ready|project not found/.test(String(e))"));
+        assert_eq!(src.matches("globalThis.__tsw_initRetry=0,").count(), 1);
+        assert!(src.contains("await j.initialize(),globalThis.__tsw_initRetry=0,Z.info("));
+        let once = src.clone();
+        patch_init_retry(&mut src).unwrap();
+        assert_eq!(src, once);
+    }
+
+    #[test]
+    fn capture_pstore_head_inserts_after_brace_and_is_idempotent() {
+        let mut src = "async createProject(e=!1){let{projectId:t}=this._projectStore.getState();if(t&&!e)return{project_id:t};try{this._projectStore.actions.setIsCreatingProject(!0)}finally{}}async createProjectWithTimeout(){}".to_string();
+        patch_capture_pstore_head(&mut src).unwrap();
+        assert_eq!(
+            src,
+            "async createProject(e=!1){(globalThis.__tsw_projectStore=this._projectStore);/*__TSW_PSTORE_HEAD__*/let{projectId:t}=this._projectStore.getState();if(t&&!e)return{project_id:t};try{this._projectStore.actions.setIsCreatingProject(!0)}finally{}}async createProjectWithTimeout(){}"
+        );
+        let once = src.clone();
+        patch_capture_pstore_head(&mut src).unwrap();
+        assert_eq!(src, once);
+    }
+
+    const V2_SESSION_RETRY: &str = r#"async function S(e,t,r,n=10,i={}){let o;for(let a=0;a<=n;a++){if(a>0&&i.shouldContinue?.()===!1)throw o;try{return await t()}catch(t){if(o=t,i.shouldContinue?.()===!1)throw t;if(!function(e){if(!e||"object"!=typeof e||!("code"in e))return!0;let{code:t}=e;return"number"!=typeof t||t<=0}(t))throw r.error(`[ai-chat/v2][SessionListService] ${e} failed without retry`,{error:t}),t;if(a>=n)break;r.warn(`[ai-chat/v2][SessionListService] ${e} failed, retrying`,{attempt:a+1,retryCount:n,delayMs:1e3,error:t}),await (0,h.y)(1e3)}}throw r.error(...failed after retries...),o}"#;
+
+    #[test]
+    fn v2_retry_patch_marks_503_retryable() {
+        let mut src = V2_SESSION_RETRY.to_string();
+        patch_v2_retry_503(&mut src).unwrap();
+        assert!(src.contains(
+            r#"function(e){if(e&&(e.code===503||/boot_config_not_ready/.test(String(e.message||""))))return!0;/*__TSW_V2RETRY__*/if(!e||"#
+        ));
+        let once = src.clone();
+        patch_v2_retry_503(&mut src).unwrap();
+        assert_eq!(src, once);
+    }
+
+    #[test]
+    fn v2_retry_patch_rejects_unknown_shape() {
+        let mut no_code = V2_SESSION_RETRY.replace("\"code\"in ", "");
+        assert!(patch_v2_retry_503(&mut no_code).is_err());
+        assert!(!no_code.contains(TSW_V2RETRY_FLAG));
+
+        let mut renamed = V2_SESSION_RETRY.replace("failed without retry", "failed without backoff");
+        assert!(patch_v2_retry_503(&mut renamed).is_err());
+        assert!(!renamed.contains(TSW_V2RETRY_FLAG));
+    }
+
+    const V2_LITE_NOTFOUND: &str = r#"getSessionLifecyclePort(){return o.XT.tryResolve(i.F.SessionLifecycle)}async deleteSession(e,t){return!0}async initSession(e){try{}catch(r){a.logger.error("[ChatSessionService] Failed to init session:",r);let t=r instanceof Error?r.message:"Unknown error";throw this.sessionStore.relation.setInitError(e,{message:t}),r}}async initSessionForSoloLite(e,t,r){let n=0,i=()=>!0;try{1}catch(o){if(!i())return;a.logger.error("[ChatSessionService] Session init error (Lite):",o);let r=o instanceof Error?o.message:"Unknown error",n=o?.code;throw this.sessionStore.relation.setInitError(e,{message:r,env:t,code:n}),o}finally{}}"#;
+
+    #[test]
+    fn v2_notfound_patch_switches_off_missing_session_and_is_idempotent() {
+        let mut src = V2_LITE_NOTFOUND.to_string();
+        patch_v2_session_not_found(&mut src).unwrap();
+        assert!(src.contains("tswV2Navigate(){return o.XT.tryResolve(i.F.Navigate)}"));
+        assert!(src.contains(
+            r#"if(/session not found/i.test(r)){this.sessionStore.relation.clearInitError(e);try{await this.deleteSession(e,!0)}catch(__tswNf){}try{this.tswV2Navigate()?.navigateHomePage?.()}catch(__tswNf){}return}/*__TSW_V2NOTFOUND__*/throw this.sessionStore.relation.setInitError(e,{message:r,env:t,code:n}),o"#
+        ));
+        assert!(src.contains("throw this.sessionStore.relation.setInitError(e,{message:t}),r"));
+        let once = src.clone();
+        patch_v2_session_not_found(&mut src).unwrap();
+        assert_eq!(src, once);
+    }
+
+    #[test]
+    fn v2_notfound_patch_rejects_unknown_shape() {
+        let mut renamed = V2_LITE_NOTFOUND.replace("Session init error (Lite):", "Session init failed (Lite):");
+        assert!(patch_v2_session_not_found(&mut renamed).is_err());
+        assert!(!renamed.contains(TSW_V2NOTFOUND_FLAG));
+        assert_eq!(renamed, V2_LITE_NOTFOUND.replace("Session init error (Lite):", "Session init failed (Lite):"));
+
+        let mut no_life = V2_LITE_NOTFOUND.replace("getSessionLifecyclePort(){return ", "getLifecyclePort(){return ");
+        assert!(patch_v2_session_not_found(&mut no_life).is_err());
+        assert!(!no_life.contains(TSW_V2NOTFOUND_FLAG));
+        assert!(!no_life.contains("tswV2Navigate("));
+    }
 }

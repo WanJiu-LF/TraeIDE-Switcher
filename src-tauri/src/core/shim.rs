@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::io;
 use std::sync::Mutex;
 
-pub const SHIM_VERSION: &str = "1.2.0";
+pub const SHIM_VERSION: &str = "1.2.6";
 pub const SHIM_EXT_ID: &str = "trae-ide-switcher.hotswap";
 /// 固定 uuid：extensions.json 登记项须跨安装稳定
 pub const SHIM_EXT_UUID: &str = "b7c4d2e8-9f2a-4b3c-8e5d-tswswitch01";
@@ -139,11 +139,36 @@ async function poll() {
       let result = null;
       if (payload.action === 'login') {
         if (!payload.userInfo) throw new Error('login payload missing userInfo');
+        // 换号前先清掉聊天侧缓存的 project_id：agent 按 (user_id, project_id) 校验归属，
+        // 不清的话新账号会拿旧 id 查会话 → project not found → 面板回落「服务启动异常」。
+        // 命令缺失（旧补丁）只降级，不影响换号。
+        let projectReset = null;
+        try {
+          projectReset = safeJson(
+            await raceTimeout(
+              Promise.resolve(vscode.commands.executeCommand('_tsw.prepareSwitch', {})),
+              5000,
+              'prepareSwitch',
+            ),
+          );
+        } catch (e) {
+          projectReset = { ok: false, error: (e && e.message) || String(e) };
+        }
         result = await vscode.commands.executeCommand('_tsw.replaceUserInfo', {
           userInfo: payload.userInfo,
           device: payload.device || null,
         });
         result = (result && typeof result === 'object') ? result : { success: true };
+        result = Object.assign({}, result, { projectReset: projectReset });
+        // 换号只换了内存身份，agent 进程仍握着旧账号的会话句柄；
+        // 默认随后重启 agent（等价手点「重启服务」），旧对话才能按新账号重新解析。
+        if (payload.restart_ai !== false) {
+          const r = await restartAiAgent(payload.restart_ai_delay_ms);
+          result = Object.assign({}, result, { aiRestart: r });
+        }
+      } else if (payload.action === 'restart-ai') {
+        result = await restartAiAgent(payload.delay_ms);
+        result = Object.assign({ success: true }, result);
       } else if (payload.action === 'logout') {
         await vscode.commands.executeCommand('icube.common.logout');
         result = { success: true };
@@ -180,6 +205,70 @@ async function poll() {
   } finally {
     busy = false;
   }
+}
+
+/**
+ * 重启 AI 服务（= 面板上那颗「重启服务」按钮的等价动作）。
+ *
+ * 全部动作都在 workbench 侧的 `_tsw.reloadAgent` 里完成（重启 agent 进程 + 重建渲染进程的
+ * 客户端单例），shim 只负责调用和搬运结果。**不能**走 `workbench.action.reloadAiAgent`：
+ * 那个 Action2 被 `quality==="stable"` 短路，CN stable 版根本没注册（实测 command not found）。
+ *
+ * 只重启进程不碰对话库，所以历史记录保留。带超时护栏：agent 起不来时不能把 busy 单锁挂死。
+ */
+async function restartAiAgent(delayMs, payload) {
+  const out = { ok: false, process: null, client: null };
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const wait = Math.max(0, Number(delayMs) || 0);
+  try {
+    if (wait > 0) {
+      await new Promise((r) => setTimeout(r, Math.min(wait, 10000)));
+    }
+    const r = await raceTimeout(
+      Promise.resolve(vscode.commands.executeCommand('_tsw.reloadAgent', {})),
+      25000,
+      'reloadAgent',
+    );
+    const v = safeJson(r) || {};
+    out.process = v.process || { ok: false, error: 'workbench 未返回进程状态' };
+    out.client = v.client || { ok: false, error: 'workbench 未返回客户端状态' };
+    out.ok = !!v.ok;
+    // 重启会掐断面板正在进行的那次 initChatView，界面停在「服务启动异常」。
+    // 官方那颗按钮除了重启还会重跑 initChatView；这里用「新建会话」达到同样效果：
+    // 面板重新 createProject + load session，错误态自然被替换掉。
+    try {
+      out.newSession = safeJson(
+        await raceTimeout(
+          Promise.resolve(
+            vscode.commands.executeCommand('workbench.action.icube.aiChatSidebar.createNewSession'),
+          ),
+          12000,
+          'createNewSession',
+        ),
+      );
+    } catch (e) {
+      out.newSession = { error: (e && e.message) || String(e) };
+    }
+    // 卡片上的错误文字只有 initChatView 会清（eG("")），新建会话清不掉；
+    // 外部唯一能把面板重置干净的动作是重载窗口。延迟 1.5s 让结果先落盘再重载。
+    if (p.reload_window !== false) {
+      setTimeout(() => {
+        Promise.resolve(vscode.commands.executeCommand('workbench.action.reloadWindow')).catch(() => {});
+      }, 1500);
+      out.reloadWindow = true;
+    }
+    return out;
+  } catch (e) {
+    out.error = (e && e.message) || String(e);
+    return out;
+  }
+}
+
+function raceTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' timeout ' + ms + 'ms')), ms)),
+  ]);
 }
 
 function safeJson(v) {
@@ -437,6 +526,20 @@ pub fn request_hot_swap_ch(
     let _ = std::fs::remove_file(&trig);
     Err("切换助手未响应（可能未安装、未激活或已崩溃）".into())
 }
+
+/// 单独请求一次 AI-Agent 重启（等价面板「重启服务」；只重启进程，不动对话库）。
+/// delay_ms 让 Rust 侧先完成 storage.json / state.vscdb 落盘，再让 agent 按新身份握手。
+pub fn request_restart_ai(ide: IdeKind, channel: &str, delay_ms: u64) -> Result<Value, String> {
+    request_hot_swap_ch(
+        ide,
+        channel,
+        &json!({ "action": "restart-ai", "delay_ms": delay_ms }),
+        delay_ms + RESTART_AI_TIMEOUT_MS,
+    )
+}
+
+/// 重启 AI-Agent 的轮询上限：shim 内层 15s（进程）+ 10s（客户端重建）+ 落盘等待
+pub const RESTART_AI_TIMEOUT_MS: u64 = 30_000;
 
 /// 等待 shim 心跳就绪（重启 Trae 后激活约需 5-10s）
 pub fn wait_alive(ide: IdeKind, timeout_ms: u64) -> bool {

@@ -131,7 +131,13 @@ pub fn hot_switch_via_shim_ch(
         "hasDeviceIdUpdated": true,
         "tinyDevice": tiny_device,
     });
-    let payload = json!({ "action": "login", "userInfo": user_info, "device": device });
+    let payload = json!({
+        "action": "login",
+        "userInfo": user_info,
+        "device": device,
+        // 不重启 agent：重启会掐断面板正在跑的 initChatView（见 hot_switch_full 收尾注释）
+        "restart_ai": false,
+    });
     let result = super::shim::request_hot_swap_ch(*ide, channel, &payload, 5000)?;
     if result.get("success").and_then(|v| v.as_bool()) != Some(true) {
         return Err(format!("切换助手无感换号失败: {result}"));
@@ -275,6 +281,75 @@ fn persist_after_hot_with(
     Ok(())
 }
 
+/// 换号后的 AI-Agent 重启（等价手点「重启服务」）：
+/// 只重启 agent 进程并按当前身份重新握手，不清对话库；旧会话因此能重新挂到新账号上。
+/// 异步执行——面板等二十几秒的假死比错误本身更难接受，失败只落日志。
+/// 仅 shim 通道可用（命令执行在扩展宿主里）；CDP 通道没有 executeCommand 入口。
+#[allow(dead_code)]
+fn restart_ai_after_switch(ide: IdeKind, channel: &str, delay_ms: u64) {
+    let channel = channel.to_string();
+    std::thread::spawn(move || {
+        match super::shim::request_restart_ai(ide, &channel, delay_ms) {
+            Ok(r) => {
+                // restart-ai 动作直接返回 {ok, process, client}；login 链上则嵌在 aiRestart 里
+                let ok = r
+                    .get("aiRestart")
+                    .and_then(|v| v.get("ok"))
+                    .or_else(|| r.get("ok"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if ok {
+                    // 30s 去抖命中时只重建客户端、没动进程，日志要说清楚，
+                    // 否则连着切两次的用户会以为每次都重启了服务
+                    let skipped = r
+                        .get("aiRestart")
+                        .unwrap_or(&r)
+                        .get("process")
+                        .and_then(|p| p.get("skipped"))
+                        .and_then(|v| v.as_str());
+                    match skipped {
+                        Some(why) => super::logger::log(
+                            super::logger::Level::Info,
+                            super::logger::Source::Switch,
+                            format!("已重建 AI 会话客户端（{why}）"),
+                        ),
+                        None => super::logger::log(
+                            super::logger::Level::Info,
+                            super::logger::Source::Switch,
+                            "已重启 AI 服务（旧对话可按新账号重新打开）",
+                        ),
+                    }
+                } else {
+                    // 客户端重建失败 = 多半是 ⑪ 还没注入（旧补丁）；进程重启失败是另一类，
+                    // 提示要分开，否则用户不知道该重装还是该点面板按钮。
+                    let client_ok = r
+                        .get("aiRestart")
+                        .unwrap_or(&r)
+                        .get("client")
+                        .and_then(|c| c.get("ok"))
+                        .and_then(|v| v.as_bool())
+                        == Some(true);
+                    let hint = if client_ok {
+                        "（agent 进程未确认重启，可手动点面板「重启服务」兜底）"
+                    } else {
+                        "（客户端重建失败，多半是 ⑪ 未注入或工作区结构变动：重装无感换号支持并重启 Trae）"
+                    };
+                    super::logger::log(
+                        super::logger::Level::Warn,
+                        super::logger::Source::Switch,
+                        format!("AI 服务重启未完成{hint}: {r}"),
+                    );
+                }
+            }
+            Err(e) => super::logger::log(
+                super::logger::Level::Warn,
+                super::logger::Source::Switch,
+                format!("AI 服务重启请求失败（切换助手可能仍是旧版本，需重新安装）: {e}"),
+            ),
+        }
+    });
+}
+
 fn write_vscdb_identity(path: &std::path::Path, machine_id: &str, dev: Option<&str>, sqm: Option<&str>) {
     let Ok(db) = Vscdb::open_path(path.to_path_buf()) else { return };
     let _ = db.set_text(MACHINE_ID_KEY, machine_id);
@@ -389,6 +464,12 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
             ),
         );
     }
+    // 换号后的收尾只做一件事：**什么都不做**。
+    // 2026-10-25 17:34 自测：换号前清过 project 缓存（_tsw.prepareSwitch）后，
+    // 面板 initChatView 直接走通、无报错；而 17:30 那次带自动重启的，反而把面板
+    // 从「服务启动异常」打成「进程退出疑似」（重启掐断 init 的 RPC）。
+    // 所以重启 agent 只保留成手动能力（shim 的 restart-ai / 面板上的「重启服务」）。
+    // 换号后 agent 重拉 boot config 的几秒空窗，由聊天模块补丁 ⑭（initChatView 自动重试）兜底。
     super::vault::set_current_id(account_id);
     super::logger::log(
         super::logger::Level::Info,
