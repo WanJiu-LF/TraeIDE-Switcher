@@ -90,13 +90,21 @@ if (rel.status !== 0) die("发布失败（检查 gh 登录状态与 repo 权限�
 
 // 镜像源校验：Worker 实时回源 latest.json，Release 生效后应立刻读到新版本；
 // 未同步只告警不中断（客户端会按端点顺序回落 GitHub）
+// 校验镜像源时优先用 curl：Node fetch(undici) 不走 Windows 系统代理，遇到本地
+// 代理 fake-IP（如 198.18.x.x）会 ECONNRESET，导致把健康的 Worker 误判为不可用。
+async function fetchMirrorJson(url) {
+  const curl = spawnSync("curl.exe", ["-sS", "--max-time", "20", url], { encoding: "utf8" });
+  if (curl.status === 0 && curl.stdout?.trim()) return JSON.parse(curl.stdout);
+  const r = await fetch(url, { headers: { "cache-control": "no-cache" } });
+  return r.json();
+}
+
 console.log("[4/4] 校验国内镜像源…");
 let mirrorOk = false;
 let mirrorVersion = "";
 for (let i = 0; i < 4 && !mirrorOk; i++) {
   try {
-    const r = await fetch(`${MIRROR_ENDPOINT}?t=${Date.now()}`, { headers: { "cache-control": "no-cache" } });
-    const j = await r.json();
+    const j = await fetchMirrorJson(`${MIRROR_ENDPOINT}?t=${Date.now()}`);
     mirrorVersion = String(j.version ?? "");
     mirrorOk = mirrorVersion === version;
   } catch (e) {
