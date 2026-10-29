@@ -35,6 +35,9 @@ pub struct AppSettings {
     /// 自定义更新源（latest.json 地址）；空串 = 使用内置默认端点
     #[serde(default)]
     pub update_endpoint: String,
+    /// 换号时把上一账号的本地会话挂到新账号同一工作区，换号后可继续聊
+    #[serde(default = "default_true")]
+    pub keep_sessions: bool,
 }
 
 fn default_daily_time() -> String {
@@ -47,6 +50,10 @@ fn default_switch_strategy() -> String {
 
 fn default_switch_scope() -> String {
     "all".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -67,6 +74,7 @@ impl Default for AppSettings {
             switch_scope: default_switch_scope(),
             http_proxy: String::new(),
             update_endpoint: String::new(),
+            keep_sessions: true,
         }
     }
 }

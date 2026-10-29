@@ -305,8 +305,24 @@ fn run_daily(s: &AppSettings) {
             .iter()
             .filter(|b| b.ide == IdeKind::TraeCn && b.status == AccountStatus::Normal)
             .collect();
+        // Trae 开着时，当前登录号由 IDE 自己签；切换器用派生 device_slot 再签一次
+        // 会让 Trae 设置页仍显示「签到」，一点就报 9090「操作过于频繁」。
+        let skip_uid = super::paths::IdePaths::detect(IdeKind::TraeCn)
+            .filter(|p| super::launcher::is_running(p))
+            .and_then(|_| switch::scan_current(&IdeKind::TraeCn).ok().flatten())
+            .map(|c| c.user_id);
         let mut ok = 0usize;
+        let mut skipped = 0usize;
         for b in &cn {
+            if skip_uid.as_deref() == Some(b.user_id.as_str()) {
+                skipped += 1;
+                log(
+                    Level::Info,
+                    Source::Quota,
+                    format!("跳过当前登录账号的定时签到（{}），避免和 Trae 抢签", b.name),
+                );
+                continue;
+            }
             let Ok(info) = parse_auth_blob(&b.auth_blob) else { continue };
             let client = QuotaClient::for_ide(b.ide, &region_of(&info));
             let did = super::assets::device_slot(&b.user_id);
@@ -318,7 +334,11 @@ fn run_daily(s: &AppSettings) {
                 Err(e) => log(Level::Warn, Source::Quota, format!("定时签到失败（{}）：{e}", b.name)),
             }
         }
-        log(Level::Info, Source::Quota, format!("定时签到：{ok}/{} 成功", cn.len()));
+        log(
+            Level::Info,
+            Source::Quota,
+            format!("定时签到：{ok}/{} 成功（跳过当前登录 {skipped}）", cn.len()),
+        );
     }
 }
 

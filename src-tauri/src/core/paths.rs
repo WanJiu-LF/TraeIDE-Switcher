@@ -69,6 +69,14 @@ impl IdePaths {
         self.user_data.join("machineid")
     }
 
+    /// AI-Agent SQLCipher 对话库（会话归属挂在 project.user_id 上）
+    pub fn agent_database(&self) -> PathBuf {
+        self.user_data
+            .join("ModularData")
+            .join("ai-agent")
+            .join("database.db")
+    }
+
     /// 主进程入口（--inspect 注入目标）
     pub fn main_js(&self) -> PathBuf {
         self.install_dir.join("resources").join("app").join("out").join("main.js")

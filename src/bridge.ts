@@ -613,6 +613,8 @@ export interface AppSettings {
   http_proxy: string;
   /** 自定义更新源（latest.json 地址）；空串 = 内置默认端点 */
   update_endpoint: string;
+  /** 换号时把上一账号的本地会话挂到新账号同一工作区 */
+  keep_sessions: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -631,6 +633,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   switch_scope: "all",
   http_proxy: "",
   update_endpoint: "",
+  keep_sessions: true,
 };
 
 export async function getSettings(): Promise<AppSettings> {

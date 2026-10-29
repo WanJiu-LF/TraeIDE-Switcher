@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::io;
 use std::sync::Mutex;
 
-pub const SHIM_VERSION: &str = "1.2.6";
+pub const SHIM_VERSION: &str = "1.3.1";
 pub const SHIM_EXT_ID: &str = "trae-ide-switcher.hotswap";
 /// 固定 uuid：extensions.json 登记项须跨安装稳定
 pub const SHIM_EXT_UUID: &str = "b7c4d2e8-9f2a-4b3c-8e5d-tswswitch01";
@@ -225,7 +225,7 @@ async function restartAiAgent(delayMs, payload) {
       await new Promise((r) => setTimeout(r, Math.min(wait, 10000)));
     }
     const r = await raceTimeout(
-      Promise.resolve(vscode.commands.executeCommand('_tsw.reloadAgent', {})),
+      Promise.resolve(vscode.commands.executeCommand('_tsw.reloadAgent', { force: !!p.force })),
       25000,
       'reloadAgent',
     );
@@ -233,25 +233,29 @@ async function restartAiAgent(delayMs, payload) {
     out.process = v.process || { ok: false, error: 'workbench 未返回进程状态' };
     out.client = v.client || { ok: false, error: 'workbench 未返回客户端状态' };
     out.ok = !!v.ok;
+    const quiet = !!p.quiet;
     // 重启会掐断面板正在进行的那次 initChatView，界面停在「服务启动异常」。
     // 官方那颗按钮除了重启还会重跑 initChatView；这里用「新建会话」达到同样效果：
     // 面板重新 createProject + load session，错误态自然被替换掉。
-    try {
-      out.newSession = safeJson(
-        await raceTimeout(
-          Promise.resolve(
-            vscode.commands.executeCommand('workbench.action.icube.aiChatSidebar.createNewSession'),
+    // quiet：改挂会话后要保住当前对话，不能新建会话、也不能重载窗口。
+    if (!quiet && p.new_session !== false) {
+      try {
+        out.newSession = safeJson(
+          await raceTimeout(
+            Promise.resolve(
+              vscode.commands.executeCommand('workbench.action.icube.aiChatSidebar.createNewSession'),
+            ),
+            12000,
+            'createNewSession',
           ),
-          12000,
-          'createNewSession',
-        ),
-      );
-    } catch (e) {
-      out.newSession = { error: (e && e.message) || String(e) };
+        );
+      } catch (e) {
+        out.newSession = { error: (e && e.message) || String(e) };
+      }
     }
     // 卡片上的错误文字只有 initChatView 会清（eG("")），新建会话清不掉；
     // 外部唯一能把面板重置干净的动作是重载窗口。延迟 1.5s 让结果先落盘再重载。
-    if (p.reload_window !== false) {
+    if (!quiet && p.reload_window !== false) {
       setTimeout(() => {
         Promise.resolve(vscode.commands.executeCommand('workbench.action.reloadWindow')).catch(() => {});
       }, 1500);
@@ -530,10 +534,29 @@ pub fn request_hot_swap_ch(
 /// 单独请求一次 AI-Agent 重启（等价面板「重启服务」；只重启进程，不动对话库）。
 /// delay_ms 让 Rust 侧先完成 storage.json / state.vscdb 落盘，再让 agent 按新身份握手。
 pub fn request_restart_ai(ide: IdeKind, channel: &str, delay_ms: u64) -> Result<Value, String> {
+    request_restart_ai_opts(ide, channel, delay_ms, false, false)
+}
+
+/// quiet：不新建会话、不重载窗口（改挂历史后继续当前对话）
+/// force：绕过 workbench 30s 去抖，确保进程真正重启并重新打开对话库
+pub fn request_restart_ai_opts(
+    ide: IdeKind,
+    channel: &str,
+    delay_ms: u64,
+    quiet: bool,
+    force: bool,
+) -> Result<Value, String> {
     request_hot_swap_ch(
         ide,
         channel,
-        &json!({ "action": "restart-ai", "delay_ms": delay_ms }),
+        &json!({
+            "action": "restart-ai",
+            "delay_ms": delay_ms,
+            "quiet": quiet,
+            "force": force,
+            "reload_window": !quiet,
+            "new_session": !quiet,
+        }),
         delay_ms + RESTART_AI_TIMEOUT_MS,
     )
 }

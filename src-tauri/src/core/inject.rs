@@ -135,11 +135,9 @@ const TSW_RPC_FLAG: &str = "/*__TSW_RPC__*/";
 const TSW_PREP_FLAG: &str = "/*__TSW_PREP__*/";
 /// ⑪ 注册 _tsw.reloadAgent（换号后重建 agent 会话栈）
 ///
-/// 当前代标记（第三代）：第一代只重建客户端；第二代补了进程重启但没有去抖/等健康，
-/// 连续两次换号时第二次会撞上 SIGTERM 超时 → SIGKILL，把 agent 服务打死（16:40 实测）。
-/// 第三代加了 30s 去抖 + 重启后等 3s 并轮询 startup error 再重建客户端。
-/// 装过旧代的机器靠「命令 id 定位 + 整块剥掉 + 重插」迁移（见 find_reload_block）。
-const TSW_RLD_FLAG: &str = "/*__TSW_RLD3__*/";
+/// 当前代标记（第四代）：第三代 30s 去抖在改挂会话后会跳过进程重启，新库读不进去。
+/// 第四代：`force` 绕过去抖。装过旧代的机器靠「命令 id 定位 + 整块剥掉 + 重插」迁移。
+const TSW_RLD_FLAG: &str = "/*__TSW_RLD4__*/";
 
 /// 旧版注入体遗留的裸 require 引用：main.js 是 ESM 入口，`require` 在 handler 作用域
 /// 未定义，该语句一执行就抛 ReferenceError，handler 未进入 marker 分支即中断——
@@ -1217,7 +1215,7 @@ fn pm_token_of(src: &str) -> Option<String> {
 /// 字段名不写死：deferred 按形状定位（`p` 是 Promise 且带 `complete`），变更判定走宿主自己的
 /// `getDefaultClient()`；国际版压缩态客户端字段是 `this.a`，与 CN 的 `_client` 不同名。
 /// 旧客户端不 dispose（被多个服务共享，dispose 会连带打挂面板）。
-const RELOAD_TMPL: &str = r#".registerCommand("_tsw.reloadAgent",async function(__acc,__p){/*__TSW_RLD3__*/
+const RELOAD_TMPL: &str = r#".registerCommand("_tsw.reloadAgent",async function(__acc,__p){/*__TSW_RLD4__*/
 try{
 let __proc={ok:false,error:"未定位 agent 进程服务令牌"};
 try{
@@ -1226,7 +1224,7 @@ if(!__pm||typeof __pm.restartAiAgent!=="function"){__proc={ok:false,error:"进�
 else{
 const __now=Date.now();
 const __last=globalThis.__tsw_lastAgentRestart||0;
-if(__now-__last<30000){
+if(__now-__last<30000&&!(__p&&__p.force)){
 __proc={ok:true,skipped:"30s 内刚重启过，跳过进程重启",sinceMs:__now-__last};
 }else{
 globalThis.__tsw_lastAgentRestart=__now;

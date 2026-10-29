@@ -311,6 +311,15 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             onChange={(v) => apply({ switch_strategy: v })}
           />
         </Row>
+        <Row
+          title="换号保留对话"
+          desc="把上一账号的全部本地会话接到当前窗口工作区，换号后侧栏可见并可继续聊。看的是 Trae 对话列表，不是 Agent 首页。"
+        >
+          <Toggle
+            on={settings.keep_sessions}
+            onToggle={() => apply({ keep_sessions: !settings.keep_sessions })}
+          />
+        </Row>
         <Row title="换号范围" desc="参与自动换号的账号范围：全部账号，或仅置顶账号（可将常用账号置顶固定）">
           <Seg
             options={[

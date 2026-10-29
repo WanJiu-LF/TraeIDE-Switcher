@@ -1,3 +1,4 @@
+pub mod agent_key;
 pub mod assets;
 pub mod auth;
 pub mod autoswitch;
@@ -15,8 +16,10 @@ pub mod paths;
 pub mod portable;
 pub mod quota;
 pub mod refresh;
+pub mod session_rebind;
 pub mod settings;
 pub mod shim;
+pub mod sqlcipher;
 pub mod store;
 pub mod switch;
 pub mod vault;

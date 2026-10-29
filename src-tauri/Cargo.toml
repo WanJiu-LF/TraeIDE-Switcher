@@ -24,6 +24,7 @@ aes = "0.8"
 aes-gcm = "0.10"
 cbc = { version = "0.1", features = ["alloc"] }
 pbkdf2 = "0.12"
+hmac = "0.12"
 base64 = "0.22"
 rand = "0.8"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }

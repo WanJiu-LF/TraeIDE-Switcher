@@ -133,6 +133,11 @@ pub fn decrypt_bytes(cipher: &[u8]) -> io::Result<Vec<u8>> {
     unprotect(cipher)
 }
 
+/// 给对话库密钥等非账号库敏感文件用的 DPAPI 封装
+pub fn encrypt_bytes(plain: &[u8]) -> io::Result<Vec<u8>> {
+    protect(plain)
+}
+
 /// 备份恢复用：用备份密文整体替换账号库（先轮转原库，再写入）
 pub fn replace_with_bytes(cipher: &[u8]) -> io::Result<()> {
     let _g = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());

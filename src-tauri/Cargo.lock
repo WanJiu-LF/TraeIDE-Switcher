@@ -4764,6 +4764,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "cbc",
+ "hmac",
  "p256",
  "pbkdf2",
  "rand 0.8.8",

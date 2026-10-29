@@ -145,3 +145,48 @@ pub fn state(ide: &IdePaths) -> (bool, Option<u64>) {
 pub fn instance_start_ms(ide: &IdePaths) -> Option<u64> {
     state(ide).1
 }
+
+/// 该 IDE 全部进程 pid（含 NativeExtensionService 那种同名子进程）
+pub fn pids(ide: &IdePaths) -> Vec<u32> {
+    let Some(name) = ide.exe().file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else {
+        return Vec::new();
+    };
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap as isize == -1 {
+            return Vec::new();
+        }
+        let mut entry: ProcessEntry32W = std::mem::zeroed();
+        entry.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+        let mut out = Vec::new();
+        let mut ok = Process32FirstW(snap, &mut entry);
+        while ok != 0 {
+            let len = entry
+                .sz_exe_file
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.sz_exe_file.len());
+            let exe = String::from_utf16_lossy(&entry.sz_exe_file[..len]);
+            if exe.eq_ignore_ascii_case(&name) {
+                out.push(entry.th32_process_id);
+            }
+            ok = Process32NextW(snap, &mut entry);
+        }
+        CloseHandle(snap);
+        out
+    }
+}
+
+/// 主进程 pid：同名进程里创建最早的那个
+pub fn main_pid(ide: &IdePaths) -> Option<u32> {
+    let mut best: Option<(u64, u32)> = None;
+    for pid in pids(ide) {
+        if let Some(ms) = process_start_ms(pid) {
+            best = Some(match best {
+                Some((t, p)) if t <= ms => (t, p),
+                _ => (ms, pid),
+            });
+        }
+    }
+    best.map(|(_, pid)| pid)
+}
