@@ -248,9 +248,9 @@ fn decode_trae_bundle(input: &str) -> CmdResult<ImportedTraeBundle> {
 }
 
 fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdResult<AccountSummary> {
-    let input = auth_blob.trim();
+    let input = crate::core::auth::normalize_pasted_auth(auth_blob).map_err(err)?;
     let imported = if input.to_ascii_uppercase().starts_with(IMPORT_BUNDLE_PREFIX) {
-        Some(decode_trae_bundle(input)?)
+        Some(decode_trae_bundle(&input)?)
     } else {
         None
     };
@@ -316,15 +316,16 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
 /// 粘贴凭据 → 版本判定（解密后按 host / userTag / userRegion 判断，供前端「识别并添加」预填）
 #[tauri::command]
 pub fn detect_ide(auth_blob: String) -> CmdResult<String> {
-    // TRAEBUNDLE 先剥外层，按内层 authBlob 判定版本，前端单条粘贴时才能正确路由
-    let inner = if auth_blob
+    // TRAEBUNDLE 先剥外层，按内层 authBlob 判定版本；storage.json 片段先抽出 cloudide
+    let pasted = crate::core::auth::normalize_pasted_auth(&auth_blob).map_err(err)?;
+    let inner = if pasted
         .trim()
         .to_ascii_uppercase()
         .starts_with(IMPORT_BUNDLE_PREFIX)
     {
-        decode_trae_bundle(&auth_blob)?.auth_blob
+        decode_trae_bundle(&pasted)?.auth_blob
     } else {
-        auth_blob
+        pasted
     };
     let kind = crate::core::auth::detect_ide(&inner).map_err(err)?;
     Ok(match kind {
@@ -2082,4 +2083,95 @@ fn import_portable_impl(passphrase: &str, source: &str) -> CmdResult<String> {
         format!("已用可移植账号包恢复账号库（{count} 个账号）"),
     );
     Ok(format!("已恢复 {count} 个账号；原账号库已轮转为 accounts.bak"))
+}
+
+#[cfg(test)]
+mod paste_func_tests {
+    use super::*;
+
+    fn local_storage_json() -> Option<String> {
+        let appdata = std::env::var_os("APPDATA")?;
+        for name in ["Trae CN", "Trae"] {
+            let path = std::path::PathBuf::from(&appdata)
+                .join(name)
+                .join("User")
+                .join("globalStorage")
+                .join("storage.json");
+            let raw = std::fs::read_to_string(&path).ok()?;
+            if raw.contains("iCubeAuthInfo://icube.cloudide") {
+                return Some(raw);
+            }
+        }
+        None
+    }
+
+    fn with_vault_restored<T>(f: impl FnOnce() -> T) -> T {
+        let path = crate::core::vault::vault_file();
+        let bak = path.with_extension("dpapi.func-test.bak");
+        let had = path.exists();
+        if had {
+            std::fs::copy(&path, &bak).expect("backup vault");
+        }
+        let out = f();
+        if bak.exists() {
+            let _ = std::fs::copy(&bak, &path);
+            let _ = std::fs::remove_file(&bak);
+        } else if !had && path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        out
+    }
+
+    #[test]
+    fn add_rejects_usertag_and_device_from_real_storage() {
+        let Some(raw) = local_storage_json() else { return };
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        if let Some(tag) = v.get("iCubeAuthInfo://usertag").and_then(|x| x.as_str()) {
+            match add_account_impl("trae-cn", "", "", tag) {
+                Err(err) => assert!(err.contains("usertag"), "{err}"),
+                Ok(_) => panic!("usertag should not import as login"),
+            }
+        }
+        if let Some(obj) = v.as_object() {
+            if let Some((_, dc)) = obj
+                .iter()
+                .find(|(k, _)| k.starts_with("iCubeAuthInfo://icube-dc:"))
+            {
+                if let Some(dc) = dc.as_str() {
+                    match add_account_impl("trae-cn", "", "", dc) {
+                        Err(err) => assert!(err.contains("icube-dc"), "{err}"),
+                        Ok(_) => panic!("icube-dc should not import as login"),
+                    }
+                }
+            }
+        }
+        match add_account_impl("trae-cn", "", "", "iCubeAuthInfo://icube.cloudide") {
+            Err(err) => assert!(err.contains("cloudide") || err.contains("没有识别"), "{err}"),
+            Ok(_) => panic!("key name should not import as login"),
+        }
+    }
+
+    #[test]
+    fn add_accepts_issue1_storage_json_and_json_line() {
+        let Some(raw) = local_storage_json() else { return };
+        with_vault_restored(|| {
+            let from_file = match add_account_impl("trae-cn", "", "func-test-file", &raw) {
+                Ok(s) => s,
+                Err(e) => panic!("paste whole storage.json: {e}"),
+            };
+            assert!(!from_file.user_id.is_empty());
+            assert!(!from_file.name.is_empty());
+            assert_eq!(from_file.ide, IdeKind::TraeCn);
+
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let blob = v["iCubeAuthInfo://icube.cloudide"].as_str().unwrap();
+            let line = format!("    \"iCubeAuthInfo://icube.cloudide\": \"{blob}\",");
+            let from_line = match add_account_impl("trae", "", "func-test-line", &line) {
+                Ok(s) => s,
+                Err(e) => panic!("paste cloudide JSON line: {e}"),
+            };
+            assert_eq!(from_line.user_id, from_file.user_id);
+            assert_eq!(from_line.ide, IdeKind::TraeCn);
+        });
+    }
 }

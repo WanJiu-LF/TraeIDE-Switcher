@@ -3,6 +3,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { Account, Ide } from "../types";
 import { cancelLogin, detectAccountIde, errText, pollLogin, scanLocalAccount, startLogin, type AccountSummary } from "../bridge";
+import { parseCredBlobs, pasteHint } from "../cred";
 import { IconClose, IconSearch } from "../icons";
 
 export type AccountDraft =
@@ -32,46 +33,6 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "scan", label: "读取本机 Token" },
   { key: "login", label: "登录窗口添加" },
 ];
-
-/** 粘贴容错：允许整行「邮箱<TAB>密文」、带 `iCubeAuthInfo://` 前缀或两端引号 */
-function normalizeCred(raw: string): string {
-  let s = raw.trim();
-  const tab = s.lastIndexOf("\t");
-  if (tab >= 0) s = s.slice(tab + 1).trim();
-  // 邮箱与密文用空格分隔的情形（如从聊天工具里复制）
-  if (/^\S+@\S+\s+[A-Za-z0-9+/=]{100,}$/.test(s)) s = s.split(/\s+/).pop() || s;
-  s = s.replace(/^iCubeAuthInfo:\/\//i, "").trim();
-  return s.replace(/^["']|["']$/g, "").trim();
-}
-
-/**
- * 解析一次粘贴的全部凭据：单行单账号，或多行（每行一个密文 / 「邮箱+Tab+密文」）。
- * 只保留像密文的行，空行/纯邮箱行忽略；按密文去重。
- */
-function parseCredBlobs(raw: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const BUNDLE = "TRAEBUNDLE:";
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    // 注册机可迁移账号包：整行保留前缀，后端解外层后按内层 authBlob 入库
-    if (trimmed.toUpperCase().startsWith(BUNDLE)) {
-      const body = trimmed.slice(BUNDLE.length).replace(/^["']|["']$/g, "").trim();
-      if (body.length < 100 || !/^[A-Za-z0-9+/=]+$/.test(body)) continue;
-      const bundle = `${BUNDLE}${body}`;
-      if (seen.has(bundle)) continue;
-      seen.add(bundle);
-      out.push(bundle);
-      continue;
-    }
-    const blob = normalizeCred(line);
-    if (blob.length < 100 || !/^[A-Za-z0-9+/=]+$/.test(blob)) continue;
-    if (seen.has(blob)) continue;
-    seen.add(blob);
-    out.push(blob);
-  }
-  return out;
-}
 
 export function AddAccountDialog({
   open,
@@ -165,12 +126,35 @@ export function AddAccountDialog({
 
   const editingEmail = editing?.email ?? "";
   const credCount = cred.trim() ? parseCredBlobs(cred).length : 0;
+  const credHint = pasteHint(cred);
+  const canPaste = credCount > 0 || cred.trim().length >= 20;
 
   const submitPaste = async () => {
     if (pasting) return;
     const blobs = parseCredBlobs(cred);
     if (blobs.length === 0) {
-      onToast("error", "没有识别到有效 Token", "支持 iCubeAuthInfo 密文串、注册机 TRAEBUNDLE: 账号包，或「邮箱 + Tab + 密文」，可多行批量粘贴");
+      const hint = pasteHint(cred);
+      if (hint) {
+        onToast("error", "这不是登录 Token", hint);
+        return;
+      }
+      if (cred.trim().length >= 20) {
+        setPasting(true);
+        let ide = targetIde;
+        try {
+          ide = await detectAccountIde(cred);
+        } catch {
+          // 交给后端给出具体原因
+        }
+        setPasting(false);
+        onSave({ kind: "paste", ide, name: name.trim(), note, authBlob: cred });
+        return;
+      }
+      onToast(
+        "error",
+        "没有识别到有效 Token",
+        "请复制 storage.json 里 iCubeAuthInfo://icube.cloudide 的值（不要 usertag / icube-dc）。也可直接粘贴包含该键的整行或整个文件",
+      );
       return;
     }
     setPasting(true);
@@ -364,7 +348,7 @@ export function AddAccountDialog({
                       className="input h-[96px] py-2.5 resize-none items-start"
                       value={cred}
                       onChange={(e) => setCred(e.target.value)}
-                      placeholder="粘贴 iCubeAuthInfo:// 密文，或导入文件的整行「邮箱 + Tab + 密文」"
+                      placeholder="粘贴 iCubeAuthInfo://icube.cloudide 的值，或 storage.json 里包含该键的整行 / 整个文件"
                     />
                   </Field>
                   <div className="flex gap-3">
@@ -376,30 +360,33 @@ export function AddAccountDialog({
                     </Field>
                   </div>
                   <div className="text-[11.5px] text-ink3 mt-2 leading-relaxed space-y-0.5">
-                    <div>获取 Token（先在浏览器登录对应站点，再从开发者工具复制）：</div>
                     <div>
-                      · 国际版：登录 <span className="text-ink2">https://www.trae.ai</span> → F12 → Application → Local Storage →
-                      选中 <span className="text-ink2">https://www.trae.ai</span> → 复制键 <span className="text-ink2">iCubeAuthInfo://icube.cloudide</span> 的值
+                      只要这一个键的<strong className="text-ink2 font-semibold">值</strong>：
+                      <span className="text-ink2"> iCubeAuthInfo://icube.cloudide</span>
+                      。<span className="text-ink2">usertag</span> 和 <span className="text-ink2">icube-dc</span>{" "}
+                      不是登录 Token，粘贴它们会失败。
                     </div>
                     <div>
-                      · 国内版：登录 <span className="text-ink2">https://www.trae.cn</span> → 同上，选中 <span className="text-ink2">https://www.trae.cn</span> →
+                      · 本机 Trae：打开{" "}
+                      <span className="text-ink2">%APPDATA%\Trae CN\User\globalStorage\storage.json</span>
+                      （国际版目录名是 Trae）→ 复制 cloudide 那一行，或把整个文件贴进来
+                    </div>
+                    <div>
+                      · 浏览器：登录 <span className="text-ink2">https://www.trae.cn</span> /{" "}
+                      <span className="text-ink2">https://www.trae.ai</span> → F12 → Application → Local Storage →
                       复制同一个键的值
                     </div>
-                    <div>· 也可直接粘贴本工具导出的整行「邮箱 + Tab + 密文」，邮箱前缀会自动剥离</div>
-                    <div>· 支持多行批量粘贴：每行一个密文（或整行邮箱 + Tab + 密文），一次性导入多个账号</div>
-                    <div>· 注册机导出的 <span className="text-ink2">TRAEBUNDLE:</span> 整行为可迁移账号包，含设备密钥与设备指纹，导入后可跨机续期</div>
-                    <div>
-                      · 版本按密文内的 host / userTag / userRegion 自动判定；解密失败时使用当前选中版本（
-                      {targetIde === "trae-cn" ? "Trae CN" : "Trae"}）
-                    </div>
+                    <div>· 也可粘贴本工具导出的「邮箱 + Tab + 密文」，或注册机 <span className="text-ink2">TRAEBUNDLE:</span> 账号包</div>
+                    <div>· 添加成功后还要在账号列表点「切换」，才会写进 Trae 登录态</div>
                   </div>
+                  {credHint && <div className="text-[11.5px] text-bad mt-2">{credHint}</div>}
                   <div className="flex justify-end gap-2.5 mt-6">
                     <button className="btn-ghost" onClick={onClose}>
                       取消
                     </button>
                     <button
                       className="btn-primary disabled:opacity-50"
-                      disabled={credCount === 0 || pasting}
+                      disabled={!canPaste || pasting}
                       onClick={submitPaste}
                     >
                       {pasting ? "识别中…" : credCount > 1 ? `识别并添加 ${credCount} 个` : "识别并添加"}
