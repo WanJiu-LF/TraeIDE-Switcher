@@ -196,33 +196,6 @@ export async function importPortable(passphrase: string, source: string): Promis
   return invoke<string>("import_portable", { passphrase, source });
 }
 
-// ============ 1024 签到抽奖（CN 专有）============
-
-export interface LotteryResult {
-  /** 业务码为 0（已受理） */
-  ok: boolean;
-  /** 服务端业务码，null = 未返回 */
-  code?: number | null;
-  /** 是否以 IDE 当前登录账号执行（false 时结果属于别的账号） */
-  isCurrent: boolean;
-  via: string;
-  /** 中奖文案（http 通道从 work_extra 解出）；未中奖时为安慰文案 */
-  prizeText?: string | null;
-  /** 是否已发放（含历史已抽） */
-  granted?: boolean | null;
-  /** 抵扣券面额（分），仅中奖为抵扣券时有值 */
-  couponFen?: number | null;
-  raw: unknown;
-}
-
-/** 参与「1024 签到抽百万积分」每日抽奖（活动 id: checkin_1024）。
- *  默认 via=http：直呼活动接口（账号 token + 设备槽），免切换、可并发；
- *  via=shim 走 IDE 原生命令，以**当前登录账号**身份执行（需 Trae 运行中 + 切换助手在线） */
-export async function drawCheckinLottery(id: string, via: "shim" | "http" = "http"): Promise<LotteryResult> {
-  ensureTauri();
-  return JSON.parse(await invoke<string>("draw_checkin_lottery", { id, via })) as LotteryResult;
-}
-
 // ============ P1-1 额度采样历史 ============
 
 export interface UsageSample {

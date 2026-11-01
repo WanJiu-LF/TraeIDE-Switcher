@@ -10,7 +10,6 @@ import {
   claimCheckin,
   coldSwitchRestart,
   deleteAccount,
-  drawCheckinLottery,
   DEFAULT_SETTINGS,
   errText,
   getLogs,
@@ -626,30 +625,8 @@ export default function App() {
     }
   };
 
-  // 1024 签到抽奖（CN 专有）：默认直呼活动接口（账号 token + 设备槽），免切换、不依赖 Trae 运行；
-  // 中奖以 couponFen>0 判定（抵扣券面额），未中奖时服务端返回安慰文案
-  const handleDrawLottery = async (id: string) => {
-    const acc = accounts.find((a) => a.id === id);
-    try {
-      const r = await drawCheckinLottery(id);
-      if (!r.ok) {
-        pushToast("error", `${acc?.name ?? ""} 抽奖未通过`, `业务码 ${r.code ?? "-"}`);
-      } else if ((r.couponFen ?? 0) > 0) {
-        pushToast(
-          "success",
-          `${acc?.name ?? ""} 中奖：${r.prizeText ?? ""}`,
-          `${((r.couponFen ?? 0) / 100).toFixed(0)} 元抵扣券已发放至该账号`,
-        );
-      } else {
-        pushToast("info", `${acc?.name ?? ""} 已参与 1024 抽奖`, r.prizeText ?? "未中奖，明日再来");
-      }
-    } catch (e) {
-      pushToast("error", "抽奖失败，请稍后重试", errText(e));
-    }
-  };
-
   // P0-2 批量操作：选中的账号并发执行（各命令本身按账号幂等，并发即最短耗时）
-  const handleBatch = async (action: "refresh" | "checkin" | "verify" | "delete" | "lottery", ids: string[]) => {
+  const handleBatch = async (action: "refresh" | "checkin" | "verify" | "delete", ids: string[]) => {
     if (ids.length === 0) return;
     setBatchBusy(action);
     try {
@@ -678,28 +655,6 @@ export default function App() {
             const acc = accounts.find((a) => a.id === i);
             return acc ? loadQuota(i, acc.ide).catch(() => undefined) : Promise.resolve();
           }),
-        );
-      } else if (action === "lottery") {
-        // 直呼活动接口（各账号自身 token + 设备槽）：免切换、并发执行
-        const res = await Promise.all(
-          ids.map((i) => {
-            const acc = accounts.find((a) => a.id === i);
-            if (!acc || acc.ide !== "trae-cn") return Promise.resolve(null);
-            return drawCheckinLottery(i)
-              .then((r) => ({ name: acc.name, r }))
-              .catch(() => null);
-          }),
-        );
-        const valid = res.filter(
-          (x): x is { name: string; r: import("./bridge").LotteryResult } => !!x && x.r.ok,
-        );
-        const wins = valid.filter((x) => (x.r.couponFen ?? 0) > 0);
-        pushToast(
-          "info",
-          `1024 抽奖完成：${valid.length}/${ids.length} 已参与，中奖 ${wins.length}`,
-          wins.length
-            ? wins.map((w) => `${w.name}：${w.r.prizeText ?? ""}（${((w.r.couponFen ?? 0) / 100).toFixed(0)} 元）`).join("；")
-            : undefined,
         );
       } else {
         const res = await Promise.all(ids.map((i) => verifyAccount(i).then((v) => v.valid === true).catch(() => false)));
@@ -855,7 +810,6 @@ export default function App() {
             onRelogin={() => openAddDialog({ tab: "login" })}
             onLaunchIsolated={handleLaunchIsolated}
             onSwitchIsolated={handleSwitchIsolated}
-            onDrawLottery={handleDrawLottery}
             onBatch={handleBatch}
             batchBusy={batchBusy}
           />
