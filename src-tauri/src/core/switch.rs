@@ -281,74 +281,6 @@ fn persist_after_hot_with(
     Ok(())
 }
 
-/// 换号后的 AI-Agent 重启（等价手点「重启服务」）：
-/// 只重启 agent 进程并按当前身份重新握手，不清对话库；旧会话因此能重新挂到新账号上。
-/// 异步执行——面板等二十几秒的假死比错误本身更难接受，失败只落日志。
-/// 仅 shim 通道可用（命令执行在扩展宿主里）；CDP 通道没有 executeCommand 入口。
-pub(crate) fn restart_ai_after_switch(ide: IdeKind, channel: &str, delay_ms: u64, quiet: bool) {
-    let channel = channel.to_string();
-    std::thread::spawn(move || {
-        match super::shim::request_restart_ai_opts(ide, &channel, delay_ms, quiet, quiet) {
-            Ok(r) => {
-                // restart-ai 动作直接返回 {ok, process, client}；login 链上则嵌在 aiRestart 里
-                let ok = r
-                    .get("aiRestart")
-                    .and_then(|v| v.get("ok"))
-                    .or_else(|| r.get("ok"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if ok {
-                    // 30s 去抖命中时只重建客户端、没动进程，日志要说清楚，
-                    // 否则连着切两次的用户会以为每次都重启了服务
-                    let skipped = r
-                        .get("aiRestart")
-                        .unwrap_or(&r)
-                        .get("process")
-                        .and_then(|p| p.get("skipped"))
-                        .and_then(|v| v.as_str());
-                    match skipped {
-                        Some(why) => super::logger::log(
-                            super::logger::Level::Info,
-                            super::logger::Source::Switch,
-                            format!("已重建 AI 会话客户端（{why}）"),
-                        ),
-                        None => super::logger::log(
-                            super::logger::Level::Info,
-                            super::logger::Source::Switch,
-                            "已重启 AI 服务（旧对话可按新账号重新打开）",
-                        ),
-                    }
-                } else {
-                    // 客户端重建失败 = 多半是 ⑪ 还没注入（旧补丁）；进程重启失败是另一类，
-                    // 提示要分开，否则用户不知道该重装还是该点面板按钮。
-                    let client_ok = r
-                        .get("aiRestart")
-                        .unwrap_or(&r)
-                        .get("client")
-                        .and_then(|c| c.get("ok"))
-                        .and_then(|v| v.as_bool())
-                        == Some(true);
-                    let hint = if client_ok {
-                        "（agent 进程未确认重启，可手动点面板「重启服务」兜底）"
-                    } else {
-                        "（客户端重建失败，多半是 ⑪ 未注入或工作区结构变动：重装无感换号支持并重启 Trae）"
-                    };
-                    super::logger::log(
-                        super::logger::Level::Warn,
-                        super::logger::Source::Switch,
-                        format!("AI 服务重启未完成{hint}: {r}"),
-                    );
-                }
-            }
-            Err(e) => super::logger::log(
-                super::logger::Level::Warn,
-                super::logger::Source::Switch,
-                format!("AI 服务重启请求失败（切换助手可能仍是旧版本，需重新安装）: {e}"),
-            ),
-        }
-    });
-}
-
 fn write_vscdb_identity(path: &std::path::Path, machine_id: &str, dev: Option<&str>, sqm: Option<&str>) {
     let Ok(db) = Vscdb::open_path(path.to_path_buf()) else { return };
     let _ = db.set_text(MACHINE_ID_KEY, machine_id);
@@ -514,14 +446,16 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
             ),
         );
     }
-    // 身份切成功后再改挂：热换号失败不会把会话留在半迁移状态。
-    // 改挂借 Trae 自己的 agent 重启完成（quiet：不新建会话、不重载窗口）；
-    // 没改挂时不重启：2026-10-25 自测重启会掐断 initChatView。
-    let (rebind_note, rebound) = if want_rebind {
-        maybe_rebind_sessions(*ide, from_uid.as_deref().unwrap_or(""), &bundle.user_id)
-    } else {
-        (None, false)
-    };
+    // 运行中的热换号不改挂会话：改挂必须先停一次对话服务，而每次换号都重启会触发
+    // 服务端 4011「操作过于频繁」，面板还会在重启空窗里落到「服务启动异常」。
+    // 会话改挂只在 Trae 未运行时（重启切换）执行，那条路径不需要停服。
+    if want_rebind {
+        super::logger::log(
+            super::logger::Level::Info,
+            super::logger::Source::Switch,
+            "无感换号不改挂会话（会话改挂仅在 Trae 未运行时执行）",
+        );
+    }
     super::vault::set_current_id(account_id);
     super::logger::log(
         super::logger::Level::Info,
@@ -529,14 +463,13 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
         format!("无感换号到 {}（{channel}）", bundle.name),
     );
     let base = match channel {
-        "shim" if rebound => "无感换号完成，正在重启对话服务".to_string(),
         "shim" => "无感换号完成（切换助手通道，无需重启）".into(),
         _ if r.get("deviceUpdated").and_then(|v| v.as_bool()) == Some(true) => {
             "无感换号完成（备用通道，无需重启）".into()
         }
         _ => "无感换号完成（备用通道轻量模式：设备寄存未随号同步，建议安装无感换号支持后使用切换助手）".into(),
     };
-    Ok(with_rebind_note(base, rebind_note))
+    Ok(with_rebind_note(base, None))
 }
 
 /// 续期后同步：若 storage.json 当前登录用户与目标一致，写入新凭据

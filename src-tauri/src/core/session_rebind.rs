@@ -517,79 +517,18 @@ fn rewrite_live(
     result
 }
 
-/// 与 main.js ⑮ 的约定：Trae 的 userData 下 tsw-agent-hold.req / .ack / .done
-struct AgentHold {
-    req: PathBuf,
-    ack: PathBuf,
-    done: PathBuf,
-}
-
-impl AgentHold {
-    fn new(user_data: &Path) -> Self {
-        Self {
-            req: user_data.join("tsw-agent-hold.req"),
-            ack: user_data.join("tsw-agent-hold.ack"),
-            done: user_data.join("tsw-agent-hold.done"),
-        }
-    }
-
-    fn request(&self) -> Result<(), String> {
-        let _ = std::fs::remove_file(&self.ack);
-        let _ = std::fs::remove_file(&self.done);
-        std::fs::write(&self.req, std::process::id().to_string()).map_err(|e| e.to_string())
-    }
-
-    fn wait_ack(&self, timeout: std::time::Duration) -> bool {
-        let start = std::time::Instant::now();
-        while start.elapsed() < timeout {
-            if self.ack.exists() {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        false
-    }
-}
-
-impl Drop for AgentHold {
-    /// 不论成败都放行：Trae 那边最多等 60 秒，早放早启动
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.req);
-        if self.ack.exists() {
-            let _ = std::fs::write(&self.done, b"1");
-        }
-    }
-}
-
-/// Trae 运行中：借它自己的重启流程停下 agent，在新进程启动前改写对话库
-fn rewrite_while_held(
-    ide: IdeKind,
-    paths: &IdePaths,
-    key: &[u8; 32],
-    from_user: &str,
-    to_user: &str,
-    current_fs_path: Option<&str>,
-    salted: bool,
-) -> Result<RebindReport, String> {
-    let live = paths.agent_database();
-    let hold = AgentHold::new(&paths.user_data);
-    hold.request()?;
-    super::switch::restart_ai_after_switch(ide, "", 0, true);
-    if !hold.wait_ack(std::time::Duration::from_secs(25)) {
-        return Err("Trae 没有停下对话服务，本次未改挂会话（请确认已重新安装无感换号支持）".into());
-    }
-    if !agent_key::wait_db_unlocked(&live, std::time::Duration::from_secs(5)) {
-        return Err("对话服务已停但对话库仍被占用，本次未改挂会话".into());
-    }
-    rewrite_live(&live, key, from_user, to_user, current_fs_path, salted)
-}
-
-/// 按原工作区把 from/to 两号的会话接到新号并写回加密库；Trae 运行时会顺带重启一次对话服务
+/// 按原工作区把 from/to 两号的会话接到新号并写回加密库。
+/// 只在 Trae 未运行时调用：改挂要独占对话库，运行中的 agent 一直持有句柄；
+/// 为改挂而停一次对话服务会让每次换号都重启一次 agent，触发服务端 4011「操作过于频繁」，
+/// 面板也会在重启空窗里落到「服务启动异常」。
 pub fn on_switch(ide: IdeKind, from_user: &str, to_user: &str) -> Result<RebindReport, String> {
     if from_user == to_user {
         return Ok(RebindReport::default());
     }
     let paths = IdePaths::detect(ide).ok_or("未检测到安装")?;
+    if super::launcher::is_running(&paths) {
+        return Err("Trae 运行中不改挂会话（不改挂需停一次对话服务）".into());
+    }
     let live = paths.agent_database();
     if !live.exists() {
         return Err("未找到对话库".into());
@@ -597,15 +536,6 @@ pub fn on_switch(ide: IdeKind, from_user: &str, to_user: &str) -> Result<RebindR
     let current = current_workspace_fs_path(&paths);
     let salted = super::inject::biz_salt_active(&paths);
     let key = agent_key::ensure_key(&paths)?;
-    if super::launcher::is_running(&paths) {
-        if !super::inject::agent_hold_ready(&paths) {
-            return Err("无感换号支持缺少对话服务暂停钩子，请以管理员身份重新安装（本次未改挂会话）".into());
-        }
-        if !super::shim::ready_for_hotswap(ide) {
-            return Err("切换助手未就绪，本次未改挂会话".into());
-        }
-        return rewrite_while_held(ide, &paths, &key, from_user, to_user, current.as_deref(), salted);
-    }
     rewrite_live(&live, &key, from_user, to_user, current.as_deref(), salted)
 }
 
