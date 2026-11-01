@@ -6,8 +6,7 @@ use super::agent_key;
 use super::logger::{self, Level, Source};
 use super::paths::{IdeKind, IdePaths};
 use super::sqlcipher;
-use rand::RngCore;
-use rusqlite::{params, params_from_iter, types::Value, Connection};
+use rusqlite::{params, Connection};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -18,7 +17,6 @@ const KIND_WORKSPACE: &str = "workspace";
 pub struct RebindReport {
     pub sessions: u32,
     pub projects_mapped: u32,
-    pub projects_created: u32,
     /// 定位不到工作区、留在原账号的会话
     pub skipped: u32,
     /// 新号在当前窗口工作区下的会话数（算不出当前工作区时为 None）
@@ -86,12 +84,6 @@ fn folder_key(single: Option<&str>, folders_json: Option<&str>) -> String {
 
 fn unsalt_biz(biz: &str) -> &str {
     biz.split(BIZ_SALT).next().unwrap_or(biz)
-}
-
-fn new_id() -> String {
-    let mut b = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn now_secs() -> i64 {
@@ -221,69 +213,6 @@ fn live_session_counts(conn: &Connection) -> Result<HashMap<String, u32>, rusqli
     rows.collect()
 }
 
-/// 复制源 project 一行给新号（biz 换成新号会查的值）。
-/// created_at 必须刷新为当前时刻：agent 解析 project 时按 created_at DESC, id DESC 取最新，
-/// 沿用源行的时间戳会排在同文件夹既有 project 之后，导致会话挂到永远不被选中的行。
-/// deleted_at 必须写 NULL：agent 的查询条件是 `deleted_at IS NULL`，写 0 会被直接过滤掉。
-/// 撞唯一键说明新号已有同 biz 的行（可能是已删除的），复活它并刷新时间。
-fn clone_project(
-    conn: &Connection,
-    from_pid: &str,
-    to_user: &str,
-    biz: &str,
-) -> Result<(String, bool), rusqlite::Error> {
-    let mut stmt = conn.prepare("SELECT * FROM project WHERE project_id=?1")?;
-    let col_names: Vec<String> = stmt.column_names().iter().map(|s| (*s).to_string()).collect();
-    let values: Vec<Value> = stmt.query_row(params![from_pid], |row| {
-        let mut v = Vec::with_capacity(col_names.len());
-        for i in 0..col_names.len() {
-            v.push(row.get(i)?);
-        }
-        Ok(v)
-    })?;
-    drop(stmt);
-    let new_pid = new_id();
-    let now = now_secs();
-    let mut names = Vec::new();
-    let mut placeholders = Vec::new();
-    let mut bind: Vec<Value> = Vec::new();
-    for (name, val) in col_names.iter().zip(values.into_iter()) {
-        let v = match name.as_str() {
-            "id" => continue,
-            "project_id" => Value::Text(new_pid.clone()),
-            "user_id" => Value::Text(to_user.to_string()),
-            "biz_project_id" => Value::Text(biz.to_string()),
-            "deleted_at" => Value::Null,
-            "created_at" | "updated_at" | "last_active_at" => Value::Integer(now),
-            _ => val,
-        };
-        names.push(name.clone());
-        placeholders.push(format!("?{}", names.len()));
-        bind.push(v);
-    }
-    let sql = format!(
-        "INSERT INTO project ({}) VALUES ({})",
-        names.join(","),
-        placeholders.join(",")
-    );
-    match conn.execute(&sql, params_from_iter(bind.iter())) {
-        Ok(_) => Ok((new_pid, true)),
-        Err(e) if e.to_string().contains("UNIQUE") => {
-            let existing: String = conn.query_row(
-                "SELECT project_id FROM project WHERE user_id=?1 AND biz_project_id=?2",
-                params![to_user, biz],
-                |row| row.get(0),
-            )?;
-            conn.execute(
-                "UPDATE project SET deleted_at=NULL, created_at=?2, updated_at=?2, last_active_at=?2 WHERE project_id=?1",
-                params![existing, now],
-            )?;
-            Ok((existing, false))
-        }
-        Err(e) => Err(e),
-    }
-}
-
 /// 新号在源 project 那个工作区会去 get_or_create 的 biz
 fn target_biz(src: &ProjRow, to_user: &str, salted: bool) -> Option<String> {
     let ws = src
@@ -298,45 +227,27 @@ fn target_biz(src: &ProjRow, to_user: &str, salted: bool) -> Option<String> {
     Some(if salted { format!("{ws}{BIZ_SALT}{to_user}") } else { ws })
 }
 
-/// 源 project 的会话该落到新号的哪个 project：(project_id, 是否新建)；None = 定位不到。
+/// 源 project 的会话该落到新号的哪个 project；None = 新号在这个工作区还没有真 project，
+/// 会话留在原账号。
 ///
-/// 选择口径必须与 agent 的 project 解析一致：同一 (user_id, project_kind, workspace_type,
-/// 工作区文件夹) 下取 created_at 最新、其次 id 最新的那一行——agent 就是按这个顺序挑
-/// 「当前工作区对应的 project」的。只有该新号在这个文件夹还没有任何 project 时才克隆新建。
-fn resolve_target(
-    conn: &Connection,
-    src: &ProjRow,
-    to_user: &str,
-    salted: bool,
-    to_rows: &mut Vec<ProjRow>,
-) -> Result<Option<(String, bool)>, String> {
-    let pick = |rows: &[ProjRow]| -> Option<ProjRow> {
-        rows.iter()
-            .filter(|p| p.kind == src.kind && p.workspace_type == src.workspace_type && p.folder == src.folder)
-            .max_by_key(|p| (p.created_at, p.id))
-            .cloned()
-    };
-    if src.kind != KIND_WORKSPACE {
-        // 全局助手、空窗口这类 project 不按工作区 id 取，只能对到新号同类型同文件夹的那个
-        return Ok(to_rows
+/// 只按 biz 精确匹配：客户端的 project_id 来自 get_or_create_project_v2(biz)，本地 project 行
+/// 是它的镜像。按文件夹猜一行、或自己造一行随机 project_id，都会挂到客户端永远不查询的
+/// project 上，打开就 session not found。新号还没打开过这个文件夹时宁可跳过。
+/// 全局助手、空窗口这类 project 不按工作区 id 取，按同类型同文件夹对位。
+fn resolve_target(src: &ProjRow, to_user: &str, salted: bool, to_rows: &[ProjRow]) -> Option<String> {
+    if src.kind == KIND_WORKSPACE {
+        let biz = target_biz(src, to_user, salted)?;
+        return to_rows
             .iter()
-            .filter(|p| p.kind == src.kind && p.folder == src.folder)
+            .filter(|p| p.kind == src.kind && p.workspace_type == src.workspace_type && p.biz == biz)
             .max_by_key(|p| (p.created_at, p.id))
-            .map(|p| (p.project_id.clone(), false)));
+            .map(|p| p.project_id.clone());
     }
-    if let Some(hit) = pick(to_rows) {
-        return Ok(Some((hit.project_id.clone(), false)));
-    }
-    let Some(biz) = target_biz(src, to_user, salted) else {
-        return Ok(None);
-    };
-    let (id, created) = clone_project(conn, &src.project_id, to_user, &biz).map_err(|e| e.to_string())?;
-    let mut row = src.clone();
-    row.project_id = id.clone();
-    row.biz = biz;
-    row.created_at = now_secs();
-    to_rows.push(row);
-    Ok(Some((id, created)))
+    to_rows
+        .iter()
+        .filter(|p| p.kind == src.kind && p.folder == src.folder)
+        .max_by_key(|p| (p.created_at, p.id))
+        .map(|p| p.project_id.clone())
 }
 
 fn rebind_plain(
@@ -363,20 +274,23 @@ fn rebind_plain(
     }
     let counts = live_session_counts(&conn).map_err(|e| e.to_string())?;
     let from_rows = load_user_projects(&conn, from_user).map_err(|e| e.to_string())?;
-    let mut to_rows = load_user_projects(&conn, to_user).map_err(|e| e.to_string())?;
-    let sources: Vec<ProjRow> = from_rows
+    let to_rows = load_user_projects(&conn, to_user).map_err(|e| e.to_string())?;
+    let sources: Vec<(ProjRow, bool)> = from_rows
         .iter()
-        .chain(to_rows.iter())
-        .filter(|p| counts.get(&p.project_id).copied().unwrap_or(0) > 0)
-        .cloned()
+        .map(|p| (p.clone(), true))
+        .chain(to_rows.iter().map(|p| (p.clone(), false)))
+        .filter(|(p, _)| counts.get(&p.project_id).copied().unwrap_or(0) > 0)
         .collect();
 
     let mut report = RebindReport::default();
     let mut touched: BTreeSet<String> = BTreeSet::new();
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    for src in &sources {
-        let Some((target, created)) = resolve_target(&tx, src, to_user, salted, &mut to_rows)? else {
-            report.skipped += counts.get(&src.project_id).copied().unwrap_or(0);
+    for (src, from_owned) in &sources {
+        let Some(target) = resolve_target(src, to_user, salted, &to_rows) else {
+            // 新号在这个工作区还没有真 project：会话留在原账号，等它打开过该文件夹再搬
+            if *from_owned {
+                report.skipped += counts.get(&src.project_id).copied().unwrap_or(0);
+            }
             continue;
         };
         if target == src.project_id {
@@ -388,9 +302,6 @@ fn rebind_plain(
                 params![target, src.project_id],
             )
             .map_err(|e| e.to_string())? as u32;
-        if created {
-            report.projects_created += 1;
-        }
         if n == 0 {
             continue;
         }
@@ -421,9 +332,19 @@ fn rebind_plain(
     report.projects_mapped = touched.len() as u32;
     report.current_window = current_fs_path.map(|fp| {
         let folder = norm_folder(fp);
+        let ws = workspace_id(fp);
         to_rows
             .iter()
-            .filter(|p| p.kind == KIND_WORKSPACE && p.folder == folder)
+            .filter(|p| {
+                if p.kind != KIND_WORKSPACE || p.folder != folder {
+                    return false;
+                }
+                match (&ws, salted) {
+                    (Some(w), true) => p.biz == format!("{w}{BIZ_SALT}{to_user}"),
+                    (Some(w), false) => p.biz == *w,
+                    _ => true,
+                }
+            })
             .max_by_key(|p| (p.created_at, p.id))
             .and_then(|p| {
                 conn.query_row(
@@ -671,13 +592,10 @@ mod tests {
         let report = rebind_plain(&db, "A", "B", Some(&x), true).unwrap();
         let conn = Connection::open(&db).unwrap();
 
-        // 新号在该文件夹已有 project（pB4）时直接复用：agent 解析 project 按
-        // (user_id, 文件夹, created_at DESC, id DESC) 取最新行，克隆新行反而会被旧行压住
-        let want_x = "pB4";
-        for sid in ["s1", "s2", "s6"] {
-            let (_, user, biz) = owner_of(&conn, sid);
-            assert_eq!((user.as_str(), biz.as_str()), ("B", want_x), "{sid}");
-        }
+        // X 上 B 只有 biz=project_id 的孤儿行：biz 对不上就跳过，不按文件夹猜、不造 project_id
+        assert_eq!(owner_of(&conn, "s1").0, "pA1");
+        assert_eq!(owner_of(&conn, "s2").0, "pA1");
+        assert_eq!(owner_of(&conn, "s6").0, "pB4");
         let (pid3, user3, biz3) = owner_of(&conn, "s3");
         assert_eq!((pid3.as_str(), user3.as_str(), biz3.as_str()), ("pB1", "B", by.as_str()));
         assert_eq!(owner_of(&conn, "s4").0, "pB3");
@@ -694,11 +612,10 @@ mod tests {
             .unwrap();
         assert_eq!(stale_links, 0);
 
-        assert_eq!(report.sessions, 4);
-        assert_eq!(report.projects_created, 0);
-        assert_eq!(report.projects_mapped, 3);
-        assert_eq!(report.skipped, 0);
-        assert_eq!(report.current_window, Some(3));
+        assert_eq!(report.sessions, 2);
+        assert_eq!(report.projects_mapped, 2);
+        assert_eq!(report.skipped, 2);
+        assert_eq!(report.current_window, Some(0));
         drop(conn);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -708,37 +625,9 @@ mod tests {
         let (dir, db, x, _y, _by) = fixture(false);
         rebind_plain(&db, "A", "B", Some(&x), false).unwrap();
         let conn = Connection::open(&db).unwrap();
-        let (_, user, biz) = owner_of(&conn, "s1");
-        assert_eq!((user.as_str(), biz.as_str()), ("B", "pB4"));
+        // B 在 X 的孤儿行 biz=pB4 也对不上，s1 留在 A
+        assert_eq!(owner_of(&conn, "s1").0, "pA1");
         assert_eq!(owner_of(&conn, "s3").0, "pB1");
-        drop(conn);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn revives_deleted_target_instead_of_failing() {
-        let dir = tmp_dir("revive");
-        let x = dir.join("ws");
-        std::fs::create_dir_all(&x).unwrap();
-        let x = vscode_fs_path(&x.to_string_lossy());
-        let want = format!("{}{BIZ_SALT}B", workspace_id(&x).unwrap());
-        let db = dir.join("plain.db");
-        let conn = Connection::open(&db).unwrap();
-        schema(&conn);
-        project(&conn, "pA", "A", "old", KIND_WORKSPACE, &x);
-        project(&conn, "pDead", "B", &want, KIND_WORKSPACE, &x);
-        conn.execute("UPDATE project SET deleted_at=5 WHERE project_id='pDead'", []).unwrap();
-        session(&conn, "s1", "pA");
-        drop(conn);
-        let report = rebind_plain(&db, "A", "B", None, true).unwrap();
-        let conn = Connection::open(&db).unwrap();
-        assert_eq!(owner_of(&conn, "s1").0, "pDead");
-        let deleted: Option<i64> = conn
-            .query_row("SELECT deleted_at FROM project WHERE project_id='pDead'", [], |r| r.get(0))
-            .unwrap();
-        // agent 只认 deleted_at IS NULL：复活必须写 NULL 而不是 0
-        assert!(deleted.is_none(), "deleted_at={deleted:?}");
-        assert_eq!(report.sessions, 1);
         drop(conn);
         let _ = std::fs::remove_dir_all(dir);
     }
