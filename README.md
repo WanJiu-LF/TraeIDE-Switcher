@@ -109,7 +109,7 @@ AI 对话存在本机的 SQLCipher 加密库（`%APPDATA%\<IDE>\ModularData\ai-a
 环境要求：Node.js、Rust 工具链（MSVC）、Tauri CLI 依赖项。
 
 ```bash
-npm install          # 安装前端依赖，并启用 .githooks（提交时去掉 Cursor 自动追加的共同作者署名）
+npm install          # 安装前端依赖，并启用 .githooks
 npm run dev          # 启动前端开发服务
 npm run tauri dev    # 以开发模式启动完整应用
 npm run build        # 类型检查 + 构建前端资源
