@@ -432,6 +432,13 @@ fn patch_capture_pstore_head(src: &mut String) -> Result<(), String> {
 /// 代价：各账号旧会话（挂在原共享 project 下）不再可见。
 const TSW_PIDSALT_FLAG: &str = "/*__TSW_PIDSALT__*/";
 
+/// 聊天模块是否已落盘 ⑬：决定换号改挂会话时目标 project 的 biz 要不要带用户后缀
+pub fn biz_salt_active(paths: &IdePaths) -> bool {
+    std::fs::read_to_string(paths.chat_module_js())
+        .map(|s| s.contains(TSW_PIDSALT_FLAG))
+        .unwrap_or(false)
+}
+
 fn patch_salt_biz_pid(src: &mut String) -> Result<(), String> {
     if src.contains(TSW_PIDSALT_FLAG) {
         return Ok(());
@@ -815,6 +822,9 @@ pub fn patch_chat_file(chat: &std::path::Path) -> io::Result<InjectStatus> {
     } else {
         patch_pid_chat(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     }
+    // 首次安装也必须写成 passthrough：⑧ 钉值已废弃，留着会把 store 里的 project_id
+    // 钉回 localStorage 里的旧值，导致新账号的会话列表永远取到别的 project（session not found）
+    disable_pid_pin(&mut src);
     // 换号要能清掉聊天侧缓存的 project_id，先把 project store 抓到 globalThis
     patch_capture_pstore(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     patch_capture_pstore_head(&mut src).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
@@ -961,6 +971,57 @@ pub fn patch_main(paths: &IdePaths) -> io::Result<InjectStatus> {
     patch_main_file(&paths.main_js())
 }
 
+/// ⑮ main.js：Trae 自己重启 ai-agent 时，在「已停、未启」之间给换号器留出改写对话库的窗口。
+/// 3.4.11 起 agent 被结束后进程管理器会立刻拉起，换号器自己杀进程改库会和新进程抢库、
+/// 把进程管理器打成一直健康检查超时；performAiAgentRestart 期间 _processRestarting 为真，
+/// 不会自动拉起，在它启动新进程前等换号器写完最安全。
+const TSW_HOLD_FLAG: &str = "/*__TSW_HOLD__*/";
+const TSW_HOLDFN_FLAG: &str = "/*__TSW_HOLDFN__*/";
+const HOLD_ANCHOR: &str =
+    "this.logService.info(\"[ICubeProcessManager] restartAiAgent, start to restart ai-agent process\")";
+/// userData 下有 60 秒内的 tsw-agent-hold.req 时写 .ack，再等 .done（最多 60 秒）后继续启动
+const HOLD_FN: &str = r#"
+;globalThis.__tsw_agentHold=async function(){try{const fs=await import("node:fs"),path=await import("node:path");let dir="";try{const em=await import("electron");const app=em.app||(em.default&&em.default.app);dir=app.getPath("userData")}catch(e){}if(!dir){const a=process.argv.find(x=>x.startsWith("--user-data-dir="));dir=a?a.slice(16):path.join(process.env.APPDATA||"",path.basename(process.execPath,".exe"))}const req=path.join(dir,"tsw-agent-hold.req"),ack=path.join(dir,"tsw-agent-hold.ack"),done=path.join(dir,"tsw-agent-hold.done");const rm=f=>{try{fs.unlinkSync(f)}catch(e){}};let st;try{st=fs.statSync(req)}catch(e){return}if(Date.now()-st.mtimeMs>60000){rm(req);return}rm(done);fs.writeFileSync(ack,String(process.pid));const t0=Date.now();while(Date.now()-t0<60000&&!fs.existsSync(done))await new Promise(r=>setTimeout(r,200));rm(req);rm(ack);rm(done)}catch(e){}};/*__TSW_HOLDFN__*/"#;
+
+fn patch_agent_hold(src: &mut String) -> Result<(), String> {
+    if !src.contains(TSW_HOLD_FLAG) {
+        let at = src
+            .find(HOLD_ANCHOR)
+            .ok_or("特征锚未命中：performAiAgentRestart 启动日志")?;
+        let method = src[..at]
+            .rfind("async performAiAgentRestart(")
+            .ok_or("特征锚未命中：performAiAgentRestart")?;
+        if at - method > 800 {
+            return Err("performAiAgentRestart 形态异常（启动日志不在方法开头附近）".into());
+        }
+        let sep = match src.as_bytes()[at - 1] {
+            b',' => ',',
+            b';' | b'{' => ';',
+            _ => return Err("performAiAgentRestart 形态异常（启动日志前不是语句边界）".into()),
+        };
+        src.insert_str(at, &format!("await globalThis.__tsw_agentHold?.(){TSW_HOLD_FLAG}{sep}"));
+    }
+    if !src.contains(TSW_HOLDFN_FLAG) {
+        src.push_str(HOLD_FN);
+    }
+    Ok(())
+}
+
+/// main.js 是否带 ⑮：没有它就不能在 Trae 运行时安全改写对话库
+pub fn agent_hold_ready(paths: &IdePaths) -> bool {
+    std::fs::read_to_string(paths.main_js())
+        .map(|s| s.contains(TSW_HOLD_FLAG) && s.contains(TSW_HOLDFN_FLAG))
+        .unwrap_or(false)
+}
+
+fn warn_hold_failed(e: &str) {
+    crate::core::logger::log(
+        crate::core::logger::Level::Warn,
+        crate::core::logger::Source::System,
+        format!("对话服务暂停钩子未生效（换号保留对话在 Trae 运行时不可用）: {e}"),
+    );
+}
+
 /// 移除注入体里对 setI18nApiHostByUserInfo 的深搜调用块：CN 3.4.4 无此方法，
 /// 深搜会命中 main 里的 toService IPC 代理，跨进程抛 CodeExpectedError 成为 main
 /// 未捕获异常并打断 ai-agent（换号后「服务启动异常」/ 一直加载的根因）。
@@ -983,7 +1044,17 @@ pub fn patch_main_file(main: &std::path::Path) -> io::Result<InjectStatus> {
     let repaired = repair_v2_require(&mut src);
     let stripped = strip_bad_i18n_call(&mut src);
     if src.contains(TSW_V2_FLAG) && src.contains(TSW_ICDRS_FLAG) {
-        if repaired || stripped {
+        let needs_hold = !(src.contains(TSW_HOLD_FLAG) && src.contains(TSW_HOLDFN_FLAG));
+        let held = needs_hold
+            && match patch_agent_hold(&mut src) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn_hold_failed(&e);
+                    false
+                }
+            };
+        if repaired || stripped || held {
+            ensure_bak(main)?;
             std::fs::write(main, &src)?;
             return Ok(InjectStatus::Patched);
         }
@@ -1001,6 +1072,10 @@ pub fn patch_main_file(main: &std::path::Path) -> io::Result<InjectStatus> {
     }
     if !errs.is_empty() {
         return Err(io::Error::new(io::ErrorKind::NotFound, errs.join("; ")));
+    }
+    // ⑮ 只影响换号保留对话：打不上不拦热换号本身
+    if let Err(e) = patch_agent_hold(&mut src) {
+        warn_hold_failed(&e);
     }
     std::fs::write(main, src)?;
     Ok(InjectStatus::Patched)
@@ -1052,6 +1127,8 @@ pub fn patch_workbench_file(wb: &std::path::Path) -> io::Result<InjectStatus> {
             errs.push(e);
         }
     }
+    // 无论是否刚插入，都降级为 passthrough（⑧ 钉值已废弃，见 patch_chat_file 注释）
+    disable_pid_pin(&mut src);
     // 会话用量链路：客户端暴露 + RPC 代理命令（结构面变动只降级，不影响热换号）
     // 无条件调用：已打过 ⑨ 的旧注入体需要补宿主 capture（换号后重建客户端）
     if let Err(e) = patch_ai_client(&mut src) {
@@ -1118,8 +1195,10 @@ fn patch_register_command(src: &mut String) -> Result<(), String> {
 }
 
 /// ⑨ workbench：把进程内 ai-agent RPC 客户端暴露到 globalThis.__tsw_ai
-/// 锚 = initDefaultClient 内的 `this.<field>=await this.createClient(<arg>)`，
-/// 两种发行版都命中：国际版压缩态 `this.a=await this.createClient(t)`、CN 可读态 `this._client=await this.createClient(t)`
+/// 锚 = initDefaultClient 内的 `=await this.createClient(<arg>)`，两种形态：
+/// - 直接赋字段：国际版压缩态 `this.a=await this.createClient(t)`、CN 3.4.9 `this._client=await this.createClient(t)`
+/// - 先进局部变量（CN 3.4.11 起）：`const t=…,s=await this.createClient(t);…this._client=s,…`，
+///   声明列表里不能插赋值，改接在 `this.<field>=<var>` 之后
 fn patch_ai_client(src: &mut String) -> Result<(), String> {
     if src.contains(TSW_AIC_FLAG) {
         // 已打过 ⑨ 的旧注入体：在 initDefaultClient 方法头补一行宿主 capture
@@ -1140,21 +1219,34 @@ fn patch_ai_client(src: &mut String) -> Result<(), String> {
         .find(call)
         .ok_or("特征锚未命中：initDefaultClient 内的 createClient 调用")?;
     let at = start + rel;
-    // 客户端字段（this.<x>）：回溯标识符，须以 "this." 收尾
-    let (field_end, _) = ident_before(src.as_bytes(), at).ok_or("客户端字段解析失败")?;
-    if !src[..field_end].ends_with("this.") {
-        return Err("客户端字段形态异常（非 this.<field>）".into());
-    }
-    let field_start = field_end - 5;
+    let (ident_start, var) = ident_before(src.as_bytes(), at).ok_or("客户端字段解析失败")?;
     let arg_start = at + call.len();
     let close = src[arg_start..].find(')').ok_or("createClient 调用未闭合")?;
     let after_call = arg_start + close + 1;
-    let field = src[field_start..at].to_string();
-    src.insert_str(
-        after_call,
-        &format!(",globalThis.__tsw_ai={field},globalThis.__tsw_aiHost=this{TSW_AIC_FLAG}"),
-    );
-    Ok(())
+    let expose = |field: &str| format!(",globalThis.__tsw_ai={field},globalThis.__tsw_aiHost=this{TSW_AIC_FLAG}");
+    if src[..ident_start].ends_with("this.") {
+        let field = src[ident_start - 5..at].to_string();
+        src.insert_str(after_call, &expose(&field));
+        return Ok(());
+    }
+    let needle = format!("={var}");
+    let win = (after_call + 600).min(src.len());
+    let mut from = after_call;
+    while let Some(rel) = src[from..win].find(&needle) {
+        let eq = from + rel;
+        let end = eq + needle.len();
+        from = end;
+        if src.as_bytes().get(end).is_some_and(|b| is_ident_byte(*b)) {
+            continue;
+        }
+        let Some((field_start, _)) = ident_before(src.as_bytes(), eq) else { continue };
+        if src[..field_start].ends_with("this.") {
+            let field = src[field_start - 5..eq].to_string();
+            src.insert_str(end, &expose(&field));
+            return Ok(());
+        }
+    }
+    Err("客户端字段形态异常（createClient 结果没有赋给 this.<field>）".into())
 }
 
 /// ⑩ workbench：注册 _tsw.chatRpc —— 经 __tsw_ai 直调 agent 本地 RPC 的只读代理。
@@ -1720,5 +1812,93 @@ mod tests {
         assert!(patch_v2_session_not_found(&mut no_life).is_err());
         assert!(!no_life.contains(TSW_V2NOTFOUND_FLAG));
         assert!(!no_life.contains("tswV2Navigate("));
+    }
+
+    const INIT_CLIENT_3411: &str = "this.initDefaultClient()}async initDefaultClient(){const e=this._remoteAgentService.getConnection();e&&await Promise.all([e.getInitialConnectionTimeMs()]);const t=await this.provideConfig(),s=await this.createClient(t);this._client||this._register(r);const n=this._client!==void 0&&this._client!==s;this._client=s,n&&this._onDidChangeRuntime.fire(),this._clientPromise.complete(this._client)}";
+
+    const PERFORM_RESTART: &str = "enqueueAiAgentRestart(e){return e}async performAiAgentRestart(e){this._processRestarting=!0;let i=!1;try{const r=this._process;r&&await this.terminateAiAgentForRestart(r),i=!0,await e?.(),this.logService.info(\"[ICubeProcessManager] restartAiAgent, start to restart ai-agent process\");const s=await this.getUseIpv6()}catch(r){throw r}}";
+
+    #[test]
+    fn agent_hold_patch_waits_before_start_and_is_idempotent() {
+        let mut src = PERFORM_RESTART.to_string();
+        patch_agent_hold(&mut src).unwrap();
+        assert!(src.contains(&format!(
+            "await e?.(),await globalThis.__tsw_agentHold?.(){TSW_HOLD_FLAG},this.logService.info("
+        )));
+        assert!(src.ends_with(TSW_HOLDFN_FLAG));
+        let once = src.clone();
+        patch_agent_hold(&mut src).unwrap();
+        assert_eq!(src, once);
+    }
+
+    #[test]
+    fn agent_hold_patch_rejects_unknown_shape() {
+        let mut src = PERFORM_RESTART.replace("start to restart ai-agent process", "restarting");
+        assert!(patch_agent_hold(&mut src).is_err());
+        assert!(!src.contains(TSW_HOLD_FLAG));
+    }
+
+    #[test]
+    fn ai_client_patch_handles_local_var_shape() {
+        let mut src = INIT_CLIENT_3411.to_string();
+        patch_ai_client(&mut src).unwrap();
+        assert!(src.contains(&format!(
+            "this._client=s,globalThis.__tsw_ai=this._client,globalThis.__tsw_aiHost=this{TSW_AIC_FLAG},n&&"
+        )));
+        assert!(src.contains("s=await this.createClient(t);"));
+        assert_eq!(src.matches(TSW_AIC_FLAG).count(), 1);
+    }
+
+    #[test]
+    fn ai_client_patch_keeps_field_shape() {
+        let mut src = "async initDefaultClient(){const t=await this.provideConfig();this.a=await this.createClient(t),this.b.complete(this.a)}".to_string();
+        patch_ai_client(&mut src).unwrap();
+        assert!(src.contains(&format!(
+            "this.a=await this.createClient(t),globalThis.__tsw_ai=this.a,globalThis.__tsw_aiHost=this{TSW_AIC_FLAG},this.b"
+        )));
+    }
+
+    /// 在本机 Trae CN 安装文件的副本上跑全部补丁（安装目录不动），确认新版本的特征锚都还命中
+    #[test]
+    #[ignore = "reads the local Trae CN install"]
+    fn dry_run_all_patches_on_local_install_copy() {
+        let Some(paths) = IdePaths::detect(crate::core::paths::IdeKind::TraeCn) else { return };
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("inject-dryrun");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let main = dir.join("main.js");
+        let wb = dir.join("workbench.desktop.main.js");
+        let chat = dir.join("index.mjs");
+        std::fs::copy(paths.main_js(), &main).unwrap();
+        std::fs::copy(paths.workbench_js(), &wb).unwrap();
+        std::fs::copy(paths.chat_module_js(), &chat).unwrap();
+        let err = |r: io::Result<InjectStatus>| r.err().map(|e| e.to_string());
+        let results = [
+            ("bridge", err(patch_file(&main))),
+            ("main", err(patch_main_file(&main))),
+            ("workbench", err(patch_workbench_file(&wb))),
+            ("chat", err(patch_chat_file(&chat))),
+        ];
+        for (name, e) in &results {
+            eprintln!("{name}: {}", e.as_deref().unwrap_or("ok"));
+        }
+        assert!(results.iter().all(|(_, e)| e.is_none()));
+        let main_src = std::fs::read_to_string(&main).unwrap();
+        let wb_src = std::fs::read_to_string(&wb).unwrap();
+        let chat_src = std::fs::read_to_string(&chat).unwrap();
+        for (name, ok) in [
+            ("main agent hold hook", main_src.contains(TSW_HOLD_FLAG)),
+            ("main agent hold fn", main_src.contains(TSW_HOLDFN_FLAG)),
+            ("workbench command", wb_src.contains(TSW_CMD_FLAG)),
+            ("reloadAgent v4", wb_src.contains(TSW_RLD_FLAG)),
+            ("chat project store", chat_src.contains(TSW_PSTORE_FLAG)),
+            ("chat biz salt", chat_src.contains(TSW_PIDSALT_FLAG)),
+            ("chat init retry", chat_src.contains(TSW_INITRETRY2_FLAG)),
+        ] {
+            eprintln!("{name}: {ok}");
+            assert!(ok, "{name} missing");
+        }
     }
 }

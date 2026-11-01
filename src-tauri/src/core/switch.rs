@@ -6,12 +6,6 @@ use super::store::{StorageJson, TinyStorage, Vscdb};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-
-/// 换号后重启 agent 的最短间隔。连着切会让 Trae 云端打 4011「操作过于频繁」。
-static LAST_KEEP_RESTART: Mutex<Option<Instant>> = Mutex::new(None);
-const KEEP_RESTART_COOLDOWN: Duration = Duration::from_secs(90);
 
 pub const AUTH_KEY: &str = "iCubeAuthInfo://icube.cloudide";
 pub const USERTAG_KEY: &str = "iCubeAuthInfo://usertag";
@@ -291,7 +285,7 @@ fn persist_after_hot_with(
 /// 只重启 agent 进程并按当前身份重新握手，不清对话库；旧会话因此能重新挂到新账号上。
 /// 异步执行——面板等二十几秒的假死比错误本身更难接受，失败只落日志。
 /// 仅 shim 通道可用（命令执行在扩展宿主里）；CDP 通道没有 executeCommand 入口。
-fn restart_ai_after_switch(ide: IdeKind, channel: &str, delay_ms: u64, quiet: bool) {
+pub(crate) fn restart_ai_after_switch(ide: IdeKind, channel: &str, delay_ms: u64, quiet: bool) {
     let channel = channel.to_string();
     std::thread::spawn(move || {
         match super::shim::request_restart_ai_opts(ide, &channel, delay_ms, quiet, quiet) {
@@ -432,12 +426,10 @@ pub fn hot_switch(ide: &IdeKind, bundle: &AccountBundle, preserved_machine_id: &
     Ok(result)
 }
 
-fn maybe_rebind_sessions(ide: IdeKind, from_user: &str, to_user: &str) -> Option<String> {
-    if !super::settings::load().keep_sessions {
-        return None;
-    }
-    if from_user == to_user {
-        return None;
+/// 返回 (提示, 是否已改挂)。Trae 运行中改挂成功时，对话服务已经在重启了。
+fn maybe_rebind_sessions(ide: IdeKind, from_user: &str, to_user: &str) -> (Option<String>, bool) {
+    if !super::settings::load().keep_sessions || from_user == to_user {
+        return (None, false);
     }
     match super::session_rebind::on_switch(ide, from_user, to_user) {
         Ok(r) => {
@@ -447,7 +439,7 @@ fn maybe_rebind_sessions(ide: IdeKind, from_user: &str, to_user: &str) -> Option
                 super::logger::Source::Switch,
                 msg.clone(),
             );
-            Some(msg)
+            (Some(msg), true)
         }
         Err(e) => {
             super::logger::log(
@@ -455,7 +447,7 @@ fn maybe_rebind_sessions(ide: IdeKind, from_user: &str, to_user: &str) -> Option
                 super::logger::Source::Switch,
                 format!("对话未随号迁移：{e}"),
             );
-            Some(format!("对话未随号迁移：{e}"))
+            (Some(format!("对话未随号迁移：{e}")), false)
         }
     }
 }
@@ -477,7 +469,7 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
     // 热通道均依赖运行中的 IDE（shim 心跳=扩展宿主 / CDP=调试端口）；未运行时直接冷切换 + --inspect 重启，等效无感
     if !super::launcher::is_running(&paths) {
         let rebind_note = if want_rebind {
-            maybe_rebind_sessions(*ide, from_uid.as_deref().unwrap_or(""), &bundle.user_id)
+            maybe_rebind_sessions(*ide, from_uid.as_deref().unwrap_or(""), &bundle.user_id).0
         } else {
             None
         };
@@ -523,39 +515,13 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
         );
     }
     // 身份切成功后再改挂：热换号失败不会把会话留在半迁移状态。
-    // 改挂会停 agent 写库，必须再拉起来；quiet 以免新建会话冲掉刚挂上的历史。
-    // 未改挂时仍不自动重启：2026-10-25 自测重启会掐断 initChatView。
-    let mut rebound = false;
-    let rebind_note = if want_rebind {
-        if let Err(e) = super::agent_key::ensure_key(&paths) {
-            super::logger::log(
-                super::logger::Level::Warn,
-                super::logger::Source::Switch,
-                format!("对话未随号迁移：{e}"),
-            );
-            Some(format!("对话未随号迁移：{e}"))
-        } else {
-            rebound = true;
-            maybe_rebind_sessions(*ide, from_uid.as_deref().unwrap_or(""), &bundle.user_id)
-        }
+    // 改挂借 Trae 自己的 agent 重启完成（quiet：不新建会话、不重载窗口）；
+    // 没改挂时不重启：2026-10-25 自测重启会掐断 initChatView。
+    let (rebind_note, rebound) = if want_rebind {
+        maybe_rebind_sessions(*ide, from_uid.as_deref().unwrap_or(""), &bundle.user_id)
     } else {
-        None
+        (None, false)
     };
-    if rebound && channel == "shim" {
-        let mut last = LAST_KEEP_RESTART.lock().unwrap_or_else(|e| e.into_inner());
-        let too_soon = last.is_some_and(|t| t.elapsed() < KEEP_RESTART_COOLDOWN);
-        if too_soon {
-            super::logger::log(
-                super::logger::Level::Info,
-                super::logger::Source::Switch,
-                "距上次重启对话服务不足 90 秒，跳过以免触发 Trae 风控（会话已改挂，稍后可手点重启服务）",
-            );
-        } else {
-            *last = Some(Instant::now());
-            drop(last);
-            restart_ai_after_switch(*ide, "", 400, true);
-        }
-    }
     super::vault::set_current_id(account_id);
     super::logger::log(
         super::logger::Level::Info,
@@ -563,7 +529,7 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
         format!("无感换号到 {}（{channel}）", bundle.name),
     );
     let base = match channel {
-        "shim" if want_rebind => "无感换号完成，正在重启对话服务".to_string(),
+        "shim" if rebound => "无感换号完成，正在重启对话服务".to_string(),
         "shim" => "无感换号完成（切换助手通道，无需重启）".into(),
         _ if r.get("deviceUpdated").and_then(|v| v.as_bool()) == Some(true) => {
             "无感换号完成（备用通道，无需重启）".into()

@@ -1,0 +1,4 @@
+#!/bin/sh
+# 去掉 Cursor 自动追加的共同作者署名，其余署名保留
+msg="$1"
+grep -iv '^co-authored-by:.*cursoragent@cursor\.com' "$msg" | git stripspace > "$msg.tsw" && mv "$msg.tsw" "$msg"

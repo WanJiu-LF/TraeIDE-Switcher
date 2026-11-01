@@ -2,3 +2,5 @@ name = "trae-updater"
 main = "updater-proxy.js"
 compatibility_date = "2026-10-01"
 workers_dev = true
+# *.workers.dev 在国内基本连不上，国内客户端走自定义域名
+routes = [{ pattern = "trae-updater.bczxy.xyz", custom_domain = true }]

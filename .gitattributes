@@ -1,0 +1,2 @@
+# git hook 由 sh 执行，CRLF 会让脚本报错
+.githooks/* text eol=lf

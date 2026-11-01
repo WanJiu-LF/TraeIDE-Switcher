@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RELEASE_REPO = "WanJiu-LF/TraeIDE-Switcher";
-// 国内镜像源（Cloudflare Worker，回源 GitHub Releases）：必须与 tauri.conf.json endpoints[0] 一致
-const MIRROR_ENDPOINT = "https://trae-updater.wanjiu.workers.dev/latest.json";
+// 国内镜像源（Cloudflare Worker 自定义域名，回源 GitHub Releases）：必须与 tauri.conf.json endpoints[0] 一致
+const MIRROR_ENDPOINT = "https://trae-updater.bczxy.xyz/latest.json";
 const KEY_FILE = join(root, "src-tauri", "keys", "updater.key");
 
 const die = (msg) => {
@@ -19,10 +19,58 @@ const die = (msg) => {
   process.exit(1);
 };
 
+const capture = (cmd, args) => {
+  const r = spawnSync(cmd, args, { cwd: root, encoding: "utf8" });
+  return r.status === 0 ? r.stdout.trimEnd() : null;
+};
+
 const conf = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
 const version = conf.version;
 const endpoint = conf.plugins?.updater?.endpoints?.[0] ?? "";
 if (!version) die("tauri.conf.json 缺少 version");
+
+const pkgVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+const cargoVersion = readFileSync(join(root, "src-tauri", "Cargo.toml"), "utf8").match(
+  /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m,
+)?.[1];
+if (pkgVersion !== version || cargoVersion !== version) {
+  die(`版本号不一致：tauri.conf.json=${version}，package.json=${pkgVersion}，Cargo.toml=${cargoVersion}`);
+}
+
+// 以下检查都在构建前做：产物必须对应一个已推送的提交，标签也要打在这个提交上
+const dirty = capture("git", ["status", "--porcelain", "--untracked-files=no"]);
+if (dirty === null) die("读取 git 状态失败");
+if (dirty) die(`有未提交的改动，发布产物会和提交对不上：\n${dirty}`);
+
+const head = capture("git", ["rev-parse", "HEAD"]);
+if (!head) die("读取当前提交失败");
+// 走 GitHub API 而不是 git fetch：本机直连 github.com:443 不稳定时 API 往往仍可用
+const remoteMain = capture("gh", ["api", `repos/${RELEASE_REPO}/git/ref/heads/main`, "--jq", ".object.sha"]);
+if (!remoteMain) die("读取远程 main 失败（检查 gh 登录状态与网络）");
+if (remoteMain !== head) {
+  die(`当前提交还没推送到远程 main（本地 ${head.slice(0, 7)}，远程 ${remoteMain.slice(0, 7)}），先 git push 再发布`);
+}
+
+const tag = `v${version}`;
+if (spawnSync("gh", ["release", "view", tag, "--repo", RELEASE_REPO], { cwd: root, stdio: "ignore" }).status === 0) {
+  die(`仓库中已存在 Release ${tag}。请先同步提升 tauri.conf.json、package.json、Cargo.toml 的 version 后重试。`);
+}
+const tagRef = capture("gh", ["api", `repos/${RELEASE_REPO}/git/ref/tags/${tag}`, "--jq", '.object.type + " " + .object.sha']);
+if (tagRef) {
+  let [type, sha] = tagRef.split(" ");
+  if (type === "tag") sha = capture("gh", ["api", `repos/${RELEASE_REPO}/git/tags/${sha}`, "--jq", ".object.sha"]) ?? sha;
+  if (sha !== head) {
+    die(`远程标签 ${tag} 指向 ${sha.slice(0, 7)}，不是当前提交 ${head.slice(0, 7)}。确认后删除该标签或提升版本号再发布。`);
+  }
+}
+// GitHub 不允许在空仓库创建 Release，先探测一次提交数，避免构建完才发现发不出去
+const probe = spawnSync("gh", ["api", `repos/${RELEASE_REPO}/commits?per_page=1`, "--jq", "length"], {
+  cwd: root,
+  encoding: "utf8",
+});
+if (probe.status === 0 && probe.stdout.trim() === "0") {
+  die(`产物仓库 ${RELEASE_REPO} 仍是空仓库，GitHub 不允许创建 Release。请先在其中提交任意文件（如 README）后重试。`);
+}
 
 // 签名私钥只在本机使用：从本地文件注入环境变量，构建出的安装包才会带 .sig
 if (!existsSync(KEY_FILE)) die(`缺少签名私钥：${KEY_FILE}（无此文件将无法生成更新签名）`);
@@ -66,24 +114,18 @@ const latest = {
 const latestPath = join(nsisDir, "latest.json");
 writeFileSync(latestPath, JSON.stringify(latest, null, 2));
 
-const tag = `v${version}`;
-const exists = spawnSync("gh", ["release", "view", tag, "--repo", RELEASE_REPO], { cwd: root, stdio: "ignore" });
-if (exists.status === 0) {
-  die(`产物仓库中已存在 ${tag}。请先同步提升 src-tauri/tauri.conf.json 与 package.json 的 version 后重试。`);
-}
-// GitHub 不允许在空仓库创建 Release，先探测一次提交数，避免构建完才发现发不出去
-const probe = spawnSync("gh", ["api", `repos/${RELEASE_REPO}/commits?per_page=1`, "--jq", "length"], {
-  cwd: root,
-  encoding: "utf8",
-});
-if (probe.status === 0 && probe.stdout.trim() === "0") {
-  die(`产物仓库 ${RELEASE_REPO} 仍是空仓库，GitHub 不允许创建 Release。请先在其中提交任意文件（如 README）后重试。`);
-}
-
-console.log(`[3/4] 发布 ${tag} 到 ${RELEASE_REPO}…`);
+console.log(`[3/4] 发布 ${tag} 到 ${RELEASE_REPO}（标签指向 ${head.slice(0, 7)}）…`);
 const rel = spawnSync(
   "gh",
-  ["release", "create", tag, "--repo", RELEASE_REPO, "--title", tag, "--notes", latest.notes, "--latest", exePath, sigPath, latestPath],
+  [
+    "release", "create", tag,
+    "--repo", RELEASE_REPO,
+    "--target", head,
+    "--title", tag,
+    "--notes", latest.notes,
+    "--latest",
+    exePath, sigPath, latestPath,
+  ],
   { cwd: root, stdio: "inherit", shell: false },
 );
 if (rel.status !== 0) die("发布失败（检查 gh 登录状态与 repo 权限）");

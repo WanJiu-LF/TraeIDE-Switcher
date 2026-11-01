@@ -176,17 +176,3 @@ pub fn pids(ide: &IdePaths) -> Vec<u32> {
         out
     }
 }
-
-/// 主进程 pid：同名进程里创建最早的那个
-pub fn main_pid(ide: &IdePaths) -> Option<u32> {
-    let mut best: Option<(u64, u32)> = None;
-    for pid in pids(ide) {
-        if let Some(ms) = process_start_ms(pid) {
-            best = Some(match best {
-                Some((t, p)) if t <= ms => (t, p),
-                _ => (ms, pid),
-            });
-        }
-    }
-    best.map(|(_, pid)| pid)
-}

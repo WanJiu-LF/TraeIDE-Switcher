@@ -35,7 +35,7 @@ pub struct AppSettings {
     /// 自定义更新源（latest.json 地址）；空串 = 使用内置默认端点
     #[serde(default)]
     pub update_endpoint: String,
-    /// 换号时把上一账号的本地会话挂到新账号同一工作区，换号后可继续聊
+    /// 换号时把上一账号的本地会话按原工作区接到新账号，换号后可继续聊
     #[serde(default = "default_true")]
     pub keep_sessions: bool,
 }

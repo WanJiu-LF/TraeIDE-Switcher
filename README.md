@@ -11,7 +11,7 @@ Trae / Trae CN 多账号切换器 —— 面向 Windows 的桌面工具，用于
 
 ### 账号管理
 - 同时管理 Trae 国际版与 Trae CN 国内版账号，当前生效状态按版本独立判定，互不串号。
-- 多种入池方式：粘贴 Token（iCubeAuthInfo 加密串）、读取本机已登录账号、登录窗口采集。
+- 多种入池方式：粘贴 Token、读取本机已登录账号、登录窗口采集。粘贴时只认 `iCubeAuthInfo://icube.cloudide` 的值，也可以直接贴整个 `storage.json` 或其中那一行；误贴 `usertag`、`icube-dc` 会给出提示。
 - 账号置顶、编辑、删除、批量操作，卡片展示账号名、套餐、剩余额度与到期时间。
 - 账号库自动备份与一键恢复：每次改动前保留上一版，支持导出/导入加密备份。
 
@@ -20,6 +20,7 @@ Trae / Trae CN 多账号切换器 —— 面向 Windows 的桌面工具，用于
 - 切换过程同步账号对应的设备身份，避免触发服务端设备绑定限制。
 - 切换前对目标账号 Token 预检刷新，并对切换后的强制登出回调做短时拦截保护。
 - 支持「无感换号支持」文件补丁 + 切换助手组合，补丁不可用时自动转为备用通道。
+- 换号保留对话（默认开启）：把上一账号的本地会话按原工作区接给新账号，换号后打开对应文件夹即可在对话列表里继续聊。
 
 ### 自动换号
 - 账号额度耗尽时自动切换到下一个可用账号，可设置触发阈值。
@@ -57,14 +58,24 @@ Trae / Trae CN 多账号切换器 —— 面向 Windows 的桌面工具，用于
 推荐组合为「无感换号支持 + 切换助手」：先安装无感换号支持，再安装切换助手，重启 Trae 后即可无感换号。若无感换号支持文件未安装成功，将自动转为备用通道（需从本换号器启动 Trae）。安装时需以管理员身份运行本软件，并先关闭 Trae。
 
 ### 重启切换（备用通道）
-IDE 未运行或补丁不可用时，执行完整切换：终止 Trae 进程 → 写入账号对应的凭据、TinyStorage 快照、ECDSA 密钥对、遥测信息与签到设备标识 → 恢复 AI Agent 数据库备份 → 重启 Trae。
+IDE 未运行或补丁不可用时，执行完整切换：终止 Trae 进程 →（开启换号保留对话时）把会话接到新账号 → 写入账号对应的凭据、TinyStorage 快照、ECDSA 密钥对、遥测信息与签到设备标识 → 重启 Trae。
 
 ### 设备身份随号
 同一账号的设备身份（device_id、machineId、ECDSA 密钥）独立存储。切换后同步该身份，避免不同账号共用同一设备触发风控与设备绑定上限；历史入库账号若缺少设备资产，则保留本机现值，避免制造设备漂移。
 
+### 换号保留对话
+AI 对话存在本机的 SQLCipher 加密库（`%APPDATA%\<IDE>\ModularData\ai-agent\database.db`），会话挂在 project 上，project 归属某个账号的某个工作区。Trae 按「工作区 id + 账号」找 project：工作区 id 即 VS Code 的 `workspace.id`（本地文件夹为 `md5(路径 + 文件夹创建时间)`），无感换号支持生效时还会拼上账号后缀。
+
+开启「换号保留对话」后，每次换号：
+1. 首次使用时从运行中的 Trae 读取对话库密钥，用 DPAPI 加密保存在本机，之后不再读取进程内存；
+2. 暂停 AI 服务，合并 WAL，把上一账号（及新账号自己）名下的会话按原文件夹接到新账号在该工作区的 project 上。工作区 id 按文件夹现算，文件夹重建过、旧 id 已失效的会话也能找回；
+3. 写回加密库并静默重启 AI 服务。会话 id 不变，可以直接接着聊，消耗的是新账号的额度。
+
+距上次自动重启不足 90 秒时会跳过重启，避免触发 Trae「操作过于频繁」；此时会话已经改挂，稍后在对话面板手动「重启服务」即可。
+
 ### 数据保留
-- 不修改 `state.vscdb` 中的遥测 machineId（该值是 AI Agent 对话数据库的密钥来源，修改会导致对话丢失）。
-- 无感换号与重启切换在切换前均备份对话数据库，切换后恢复到目标账号上下文。
+- machineId 始终保留本机原值，不随账号切换，避免设备漂移。
+- 换号只改写会话归属，不删除任何会话。
 
 ## 环境要求与安装
 
@@ -87,17 +98,18 @@ IDE 未运行或补丁不可用时，执行完整切换：终止 Trae 进程 →
 
 ## 自动更新链路
 
-- 应用内：在「关于」页点击「检查更新」，从本仓库发布页拉取 `latest.json` 校验并安装，安装后重启应用。
-- 发布产物：安装包（NSIS）与更新描述文件 `latest.json` 由 `npm run release` 一键生成并发布至本仓库的 Releases。更新端点指向 `releases/latest/download/latest.json`，因此每个正式 Release 都必须包含 `latest.json` 与 `setup.exe`（含 `.sig`），否则客户端自动更新会失效。
+- 应用内：在「关于」页点击「检查更新」，按顺序尝试更新源并校验签名后安装，安装后重启应用。
+- 更新源顺序：国内镜像 `https://trae-updater.bczxy.xyz/latest.json` → `https://trae-updater.wanjiu.workers.dev/latest.json` → 本仓库发布页。镜像是 `deploy/` 下的 Cloudflare Worker，回源 GitHub Releases，并把安装包下载地址也改写为走镜像；`*.workers.dev` 在国内基本连不上，所以绑定了自定义域名。设置里的「自定义更新源」会排在最前。
+- 发布产物：安装包（NSIS）与更新描述文件 `latest.json` 由 `npm run release` 一键生成并发布至本仓库的 Releases。每个正式 Release 都必须包含 `latest.json` 与 `setup.exe`（含 `.sig`），否则客户端自动更新会失效。
 
-发布前需先关闭运行中的换号器，并同时提升 `src-tauri/tauri.conf.json` 与 `package.json` 的版本号。
+发布前需先关闭运行中的换号器，并同时提升 `src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml` 三处版本号。`npm run release` 在构建前会检查：三处版本号一致、没有未提交的改动、当前提交已推送到远程 `main`，并把 Release 标签打在当前提交上。
 
 ## 开发与构建
 
 环境要求：Node.js、Rust 工具链（MSVC）、Tauri CLI 依赖项。
 
 ```bash
-npm install          # 安装前端依赖
+npm install          # 安装前端依赖，并启用 .githooks（提交时去掉 Cursor 自动追加的共同作者署名）
 npm run dev          # 启动前端开发服务
 npm run tauri dev    # 以开发模式启动完整应用
 npm run build        # 类型检查 + 构建前端资源
@@ -125,7 +137,9 @@ trae_switcher/
 │  ├─ src/core/            核心模块（切换、注入、shim、额度、资产、签到、日志等）
 │  ├─ capabilities/        权限配置
 │  └─ tauri.conf.json      应用与打包配置
-├─ scripts/                构建与发布脚本
+├─ scripts/                构建、发布与 git hook 安装脚本
+├─ deploy/                 更新镜像（Cloudflare Worker）
+├─ .githooks/              仓库 git hook
 └─ package.json
 ```
 
@@ -143,6 +157,7 @@ trae_switcher/
 | --- | --- |
 | `%APPDATA%\TraeIDE-Switcher\accounts.dpapi` | 账号库（DPAPI 加密，仅本机当前用户可解密） |
 | `%APPDATA%\TraeIDE-Switcher\accounts.bak` | 上一版账号库备份 |
+| `%APPDATA%\TraeIDE-Switcher\agent-keys.dpapi` | 对话库密钥（DPAPI 加密，换号保留对话用） |
 | `%APPDATA%\TraeIDE-Switcher\settings.json` | 应用设置 |
 | `%APPDATA%\TraeIDE-Switcher\usage-history.json` | 额度采样历史 |
 | `%APPDATA%\TraeIDE-Switcher\switch-history.json` | 切换历史时间线 |
@@ -165,11 +180,14 @@ Trae 升级会覆盖安装目录下的补丁文件，需重新安装无感换号
 **出 20403 设备不匹配 / 设备绑定受限**
 该账号的设备身份与当前设备不一致。设备身份随账号独立存储，请使用该账号入池时保存的设备资产进行切换，或重新登录采集。
 
-**对话记录丢失**
-本工具不修改 AI Agent 数据库的密钥来源，切换前后均备份并恢复对话数据库。若异常，请确认未手工改动 `state.vscdb`。
+**换号后看不到之前的对话**
+会话按工作区显示：请在原来聊天的那个文件夹里打开对话列表，而不是 Agent 首页。同时确认设置里「换号保留对话」已开启、无感换号支持已安装（Trae 升级后需重装）。每次换号日志里会记录「已把 N 条会话按原工作区接到新账号」。
+
+**提示「操作过于频繁，请稍候再试」**
+这是 Trae 服务端的风控（错误码 4011），通常由短时间内连续换号、反复重启 AI 服务引起。等几分钟再操作即可。
 
 **应用内「检查更新」报错**
-请确认本仓库为公开仓库，且当前网络可访问 GitHub 发布页。
+请确认当前网络能访问 `trae-updater.bczxy.xyz` 或 GitHub 发布页。0.1.23 及更早的版本没有内置新镜像域名，可在「设置 → 自定义更新源」填入 `https://trae-updater.bczxy.xyz/latest.json` 后再检查更新。
 
 ## 免责声明
 

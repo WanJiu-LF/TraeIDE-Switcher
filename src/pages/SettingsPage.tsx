@@ -313,7 +313,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
         <Row
           title="换号保留对话"
-          desc="把上一账号的全部本地会话接到当前窗口工作区，换号后侧栏可见并可继续聊。看的是 Trae 对话列表，不是 Agent 首页。"
+          desc="换号时把上一账号的本地会话按原工作区接给新账号：在哪个文件夹聊的，换号后打开那个文件夹就能在对话列表里继续聊。"
         >
           <Toggle
             on={settings.keep_sessions}

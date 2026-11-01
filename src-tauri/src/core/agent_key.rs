@@ -6,16 +6,11 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
-
-static LAST_AGENT_PID: AtomicU32 = AtomicU32::new(0);
 
 const PROCESS_VM_READ: u32 = 0x0010;
 const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
-const PROCESS_TERMINATE: u32 = 0x0001;
 const MEM_COMMIT: u32 = 0x1000;
 const PAGE_GUARD: u32 = 0x100;
 const PAGE_NOACCESS: u32 = 0x01;
@@ -31,89 +26,6 @@ struct MemoryBasicInformation {
     state: u32,
     protect: u32,
     type_: u32,
-}
-
-const CCH_RM_SESSION_KEY: usize = 32;
-const ERROR_MORE_DATA: u32 = 234;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct RmUniqueProcess {
-    dw_process_id: u32,
-    process_start_time: i64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct RmProcessInfo {
-    process: RmUniqueProcess,
-    str_app_name: [u16; 256],
-    str_service_short_name: [u16; 64],
-    application_type: i32,
-    app_status: u32,
-    ts_session_id: u32,
-    b_restartable: i32,
-}
-
-#[link(name = "rstrtmgr")]
-extern "system" {
-    fn RmStartSession(session: *mut u32, flags: u32, key: *mut u16) -> u32;
-    fn RmRegisterResources(
-        session: u32,
-        n_files: u32,
-        files: *const *const u16,
-        n_applications: u32,
-        applications: *const RmUniqueProcess,
-        n_services: u32,
-        services: *const *const u16,
-    ) -> u32;
-    fn RmGetList(
-        session: u32,
-        needed: *mut u32,
-        n_info: *mut u32,
-        info: *mut RmProcessInfo,
-        reboot_reasons: *mut u32,
-    ) -> u32;
-    fn RmEndSession(session: u32) -> u32;
-}
-
-fn pids_locking(path: &Path) -> Vec<u32> {
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        let mut key = [0u16; CCH_RM_SESSION_KEY + 1];
-        let mut session = 0u32;
-        if RmStartSession(&mut session, 0, key.as_mut_ptr()) != 0 {
-            return Vec::new();
-        }
-        let ptr = wide.as_ptr();
-        let files = [ptr];
-        if RmRegisterResources(session, 1, files.as_ptr(), 0, std::ptr::null(), 0, std::ptr::null()) != 0 {
-            RmEndSession(session);
-            return Vec::new();
-        }
-        let mut needed = 0u32;
-        let mut n = 0u32;
-        let mut reboot = 0u32;
-        let st = RmGetList(session, &mut needed, &mut n, std::ptr::null_mut(), &mut reboot);
-        let mut out = Vec::new();
-        if (st == 0 || st == ERROR_MORE_DATA) && needed > 0 {
-            let mut info = vec![std::mem::zeroed::<RmProcessInfo>(); needed as usize];
-            n = needed;
-            if RmGetList(session, &mut needed, &mut n, info.as_mut_ptr(), &mut reboot) == 0 {
-                for it in info.iter().take(n as usize) {
-                    if it.process.dw_process_id != 0 {
-                        out.push(it.process.dw_process_id);
-                    }
-                }
-            }
-        }
-        RmEndSession(session);
-        out
-    }
 }
 
 #[link(name = "kernel32")]
@@ -133,7 +45,6 @@ extern "system" {
         info: *mut MemoryBasicInformation,
         len: usize,
     ) -> usize;
-    fn TerminateProcess(h: *mut std::ffi::c_void, code: u32) -> i32;
 }
 
 fn store_path() -> std::path::PathBuf {
@@ -390,7 +301,6 @@ pub fn capture_from_memory(paths: &IdePaths) -> Option<[u8; 32]> {
     for pid in super::launcher::pids(paths) {
         if let Some(k) = scan_pid(pid, &salt_hex) {
             if sqlcipher::verify_key(&db, &k).is_ok() {
-                LAST_AGENT_PID.store(pid, Ordering::Relaxed);
                 return Some(k);
             }
         }
@@ -416,35 +326,6 @@ pub fn ensure_key(paths: &IdePaths) -> Result<[u8; 32], String> {
     Err("尚未采集对话库密钥：请先打开 Trae 再换号一次".into())
 }
 
-pub fn pids_with_key(paths: &IdePaths, key: &[u8; 32]) -> Vec<u32> {
-    let Ok(salt) = sqlcipher::read_salt(&paths.agent_database()) else {
-        return Vec::new();
-    };
-    let salt_hex = to_hex(&salt).into_bytes();
-    let want = to_hex(key);
-    let mut hits = Vec::new();
-    for pid in super::launcher::pids(paths) {
-        if let Some(k) = scan_pid(pid, &salt_hex) {
-            if to_hex(&k) == want {
-                hits.push(pid);
-            }
-        }
-    }
-    hits
-}
-
-pub fn terminate_pid(pid: u32) -> bool {
-    unsafe {
-        let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if h.is_null() {
-            return false;
-        }
-        let ok = TerminateProcess(h, 1);
-        CloseHandle(h);
-        ok != 0
-    }
-}
-
 pub fn db_unlocked(path: &Path) -> bool {
     OpenOptions::new()
         .read(true)
@@ -463,47 +344,6 @@ pub fn wait_db_unlocked(path: &Path, timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(80));
     }
     false
-}
-
-/// 结束握着对话库的 agent 进程，直到文件可独占。不杀 IDE 主进程。
-pub fn pause_agent(paths: &IdePaths, key: &[u8; 32]) -> Result<(), String> {
-    let db = paths.agent_database();
-    if db_unlocked(&db) {
-        return Ok(());
-    }
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(8) {
-        let mut targets = pids_locking(&db);
-        if targets.is_empty() {
-            let last = LAST_AGENT_PID.load(Ordering::Relaxed);
-            if last != 0 {
-                targets.push(last);
-            }
-        }
-        if targets.is_empty() {
-            targets = pids_with_key(paths, key);
-        }
-        let self_pid = std::process::id();
-        let main_pid = super::launcher::main_pid(paths);
-        for pid in targets {
-            if pid == 0 || pid == self_pid {
-                continue;
-            }
-            if main_pid == Some(pid) {
-                continue;
-            }
-            LAST_AGENT_PID.store(pid, Ordering::Relaxed);
-            let _ = terminate_pid(pid);
-        }
-        if wait_db_unlocked(&db, Duration::from_millis(400)) {
-            return Ok(());
-        }
-    }
-    if db_unlocked(&db) {
-        Ok(())
-    } else {
-        Err("对话库仍被占用，无法改挂会话".into())
-    }
 }
 
 /// 独占打开后把源文件拷到 dest（Windows 下 share_mode=0 时不能另开句柄读）
@@ -525,27 +365,5 @@ pub fn copy_exclusive(src: &Path, dst: &Path) -> Result<(), String> {
         out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
     }
     out.flush().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// 独占覆写 live 文件
-pub fn replace_exclusive(live: &Path, new_file: &Path) -> Result<(), String> {
-    let mut src = std::fs::File::open(new_file).map_err(|e| e.to_string())?;
-    let mut dst = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .share_mode(0)
-        .open(live)
-        .map_err(|e| format!("无法独占写入对话库: {e}"))?;
-    dst.set_len(0).map_err(|e| e.to_string())?;
-    let mut buf = [0u8; 1024 * 1024];
-    loop {
-        let n = src.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        dst.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-    }
-    dst.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
