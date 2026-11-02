@@ -35,9 +35,14 @@ pub struct AppSettings {
     /// 自定义更新源（latest.json 地址）；空串 = 使用内置默认端点
     #[serde(default)]
     pub update_endpoint: String,
-    /// 换号时把上一账号的本地会话按原工作区接到新账号，换号后可继续聊
+    /// Trae 自身设置（settings.json 的 trae.* / AI.* 键与权限档位）是否全账号共用。
+    /// true=共用（换号不动设置）；false=每号一套：切走时存快照，切回时写回。
     #[serde(default = "default_true")]
-    pub keep_sessions: bool,
+    pub share_trae_settings: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_daily_time() -> String {
@@ -50,10 +55,6 @@ fn default_switch_strategy() -> String {
 
 fn default_switch_scope() -> String {
     "all".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for AppSettings {
@@ -74,7 +75,7 @@ impl Default for AppSettings {
             switch_scope: default_switch_scope(),
             http_proxy: String::new(),
             update_endpoint: String::new(),
-            keep_sessions: true,
+            share_trae_settings: true,
         }
     }
 }

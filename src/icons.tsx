@@ -29,6 +29,14 @@ export function IconSpark({ className = "w-4 h-4" }: IconProps) {
   );
 }
 
+export function IconTransfer({ className = "w-4 h-4" }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 8h11l-3-3M20 16H9l3 3" />
+    </svg>
+  );
+}
+
 export function IconGear({ className = "w-4 h-4" }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

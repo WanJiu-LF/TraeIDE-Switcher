@@ -1,6 +1,7 @@
 import type { Page, Ide } from "../types";
 import {
   IconGrid,
+  IconTransfer,
   IconList,
   IconGear,
   IconInfo,
@@ -25,6 +26,7 @@ interface SidebarProps {
 
 const NAV: { key: Page; label: string; icon: typeof IconGrid }[] = [
   { key: "accounts", label: "账号池", icon: IconGrid },
+  { key: "transfer", label: "会话迁移", icon: IconTransfer },
   { key: "assets", label: "积分与诊断", icon: IconSpark },
   { key: "logs", label: "日志", icon: IconList },
   { key: "health", label: "运行检查", icon: IconPulse },

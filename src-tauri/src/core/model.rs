@@ -56,6 +56,10 @@ pub struct AccountBundle {
     /// 用于把 20403「Token device not match」这类静默降级暴露到界面上。
     #[serde(default)]
     pub refresh_error: Option<String>,
+    /// Trae 自身设置快照（settings.json 的 trae.*/AI.* 键 + 权限档位），
+    /// 仅当设置里关闭「Trae 设置共用」时采集与写回
+    #[serde(default)]
+    pub trae_prefs: Option<serde_json::Value>,
 }
 
 impl AccountBundle {

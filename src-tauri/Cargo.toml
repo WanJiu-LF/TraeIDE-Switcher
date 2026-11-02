@@ -1,6 +1,6 @@
 [package]
 name = "traeide-switcher"
-version = "0.1.24"
+version = "0.1.25"
 description = "TraeIDE-Switcher — Trae / Trae CN 多账号切换器"
 edition = "2021"
 
@@ -33,7 +33,7 @@ winreg = "0.55"
 ureq = { version = "2", features = ["json"] }
 tungstenite = "0.24"
 url = "2"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_LibraryLoader"] }
 
 [profile.release]
 codegen-units = 1

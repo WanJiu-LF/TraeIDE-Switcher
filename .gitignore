@@ -11,3 +11,6 @@ DEV-NOTES.md
 
 # 本地逆向临时拷贝（含加密 database.db，禁止入库）
 _re_dbcopy/
+
+# 本地提取的提示词/协议转储
+system_prompt_full_dump.txt

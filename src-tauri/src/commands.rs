@@ -303,6 +303,7 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
         pinned: false,
         threshold: None,
         refresh_error: None,
+        trae_prefs: None,
         user_id: info.user_id,
     };
     let mut bundles = load_bundles()?;
@@ -816,6 +817,60 @@ fn session_usage_impl(ide: &str) -> CmdResult<String> {
     .to_string())
 }
 
+// ============ 会话迁移（跨账号，独立于无感换号）============
+
+/// 把其他账号的本地会话按原工作区迁到当前登录账号（Trae 必须已完全退出；迁移前自动整库备份）。
+/// `sessions` 为 None 时整库迁移，Some(ids) 时只迁选中的会话。
+#[tauri::command]
+pub async fn transfer_sessions(ide: String, sessions: Option<Vec<String>>) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let kind = parse_ide(&ide)?;
+        let r = crate::core::session_transfer::transfer(kind, sessions)?;
+        Ok(json!({
+            "summary": r.summary(),
+            "toName": r.to_name,
+            "accounts": r.accounts,
+            "sessions": r.sessions,
+            "projects": r.projects,
+            "skipped": r.skipped,
+            "backup": r.backup,
+        })
+        .to_string())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// 可迁移会话列表（其他账号名下、可在当前账号同一工作区落位的会话）
+#[tauri::command]
+pub async fn session_transfer_candidates(ide: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let kind = parse_ide(&ide)?;
+        let list = crate::core::session_transfer::candidates(kind)?;
+        Ok(json!(list).to_string())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// 该版本对话库备份列表（新→旧），供回滚选择
+#[tauri::command]
+pub fn list_session_backups(ide: String) -> CmdResult<String> {
+    let kind = parse_ide(&ide)?;
+    Ok(json!(crate::core::session_transfer::list_backups(kind)).to_string())
+}
+
+/// 用备份回滚对话库（Trae 必须已完全退出）
+#[tauri::command]
+pub async fn restore_session_backup(ide: String, path: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let kind = parse_ide(&ide)?;
+        crate::core::session_transfer::restore(kind, &path)
+    })
+    .await
+    .map_err(err)?
+}
+
 /// 单模型用量累计（按模型汇总本轮拉取到的全部会话）
 #[derive(Default)]
 struct ModelAgg {
@@ -1000,6 +1055,10 @@ fn capture_current_assets(bundles: &mut [AccountBundle]) {
             b.dev_device_id = cur.dev_device_id;
             b.sqm_id = cur.sqm_id;
         }
+    }
+    // 关闭「Trae 设置共用」时，把当前账号的设置快照存进它自己的账号包
+    for kind in [IdeKind::Trae, IdeKind::TraeCn] {
+        switch::capture_prefs_of_current(&kind, bundles);
     }
 }
 
@@ -1386,8 +1445,6 @@ fn ide_status_impl(ide: &str) -> CmdResult<String> {
                     (Some(pm), Some(sm)) => pm > sm,
                     _ => false,
                 };
-            // 会话/任务记录归属补丁（workbench + ai-modules-chat）
-            let chat_pinned = crate::core::inject::is_chat_pinned(&p);
             // 必须走 serde_json：install 路径含反斜杠，手拼 JSON 会产生非法转义（\d），
             // 前端 JSON.parse 抛错 → 整个状态（含登录态/当前账号）丢失
             Ok(json!({
@@ -1396,7 +1453,6 @@ fn ide_status_impl(ide: &str) -> CmdResult<String> {
                 "running": running,
                 "cdpReady": cdp_ready,
                 "tswPatched": tsw_patched,
-                "chatPinned": chat_pinned,
                 "shimAlive": shim_alive,
                 "loggedIn": login,
                 "currentId": current_id,

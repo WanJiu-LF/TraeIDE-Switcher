@@ -73,8 +73,6 @@ export interface IdeStatus {
   currentId?: string;
   /** 磁盘补丁晚于运行实例启动 = 补丁未加载进内存，需重启 IDE 激活 */
   stalePatch?: boolean;
-  /** 会话/任务归属补丁（workbench + ai-modules-chat）是否已注入 */
-  chatPinned?: boolean;
 }
 
 const PREVIEW_ERROR = "当前为浏览器预览环境，该功能仅在 TraeIDE-Switcher 桌面程序中使用";
@@ -326,6 +324,68 @@ export interface SessionUsage {
 export async function sessionUsage(ide: Ide): Promise<SessionUsage> {
   if (!isTauri()) return { sessions: [], totalCount: 0, projectId: "", models: [], errors: [] };
   return JSON.parse(await invoke<string>("session_usage", { ide })) as SessionUsage;
+}
+
+// ============ 会话迁移（跨账号，独立于无感换号）============
+
+export interface SessionTransferResult {
+  /** 后端给出的一句话结果（含迁移/跳过统计） */
+  summary: string;
+  /** 迁移目标：当前登录账号名 */
+  toName: string;
+  /** 有会话被迁走的源账号数 */
+  accounts: number;
+  sessions: number;
+  projects: number;
+  /** 定位不到当前账号对应工作区、留在原账号的会话数 */
+  skipped: number;
+  /** 迁移前的整库备份目录 */
+  backup: string;
+}
+
+export interface SessionBackup {
+  path: string;
+  mtime_ms: number;
+  size: number;
+}
+
+/** 可迁移会话（归属其他账号、且当前账号在同一工作区已有项目可落位） */
+export interface TransferCandidate {
+  session_id: string;
+  title: string;
+  updated_at: number;
+  project_id: string;
+  user_id: string;
+  account: string;
+  workspace: string;
+  migratable: boolean;
+}
+
+/** 把其他账号的本地会话按原工作区迁到当前登录账号（Trae 须已完全退出；迁移前自动整库备份）。
+ *  传 sessions 时只迁这些会话，不传则整库迁移。 */
+export async function transferSessions(ide: Ide, sessions?: string[]): Promise<SessionTransferResult> {
+  ensureTauri();
+  return JSON.parse(
+    await invoke<string>("transfer_sessions", { ide, sessions: sessions ?? null }),
+  ) as SessionTransferResult;
+}
+
+/** 可迁移会话列表（Trae 运行中即可读取；无需退出） */
+export async function listTransferCandidates(ide: Ide): Promise<TransferCandidate[]> {
+  if (!isTauri()) return [];
+  return JSON.parse(await invoke<string>("session_transfer_candidates", { ide })) as TransferCandidate[];
+}
+
+/** 该版本的对话库备份列表（新→旧） */
+export async function listSessionBackups(ide: Ide): Promise<SessionBackup[]> {
+  if (!isTauri()) return [];
+  return JSON.parse(await invoke<string>("list_session_backups", { ide })) as SessionBackup[];
+}
+
+/** 用备份回滚对话库（Trae 须已完全退出） */
+export async function restoreSessionBackup(ide: Ide, path: string): Promise<string> {
+  ensureTauri();
+  return invoke<string>("restore_session_backup", { ide, path });
 }
 
 export async function switchAccount(id: string, hot: boolean): Promise<string> {
@@ -586,8 +646,8 @@ export interface AppSettings {
   http_proxy: string;
   /** 自定义更新源（latest.json 地址）；空串 = 内置默认端点 */
   update_endpoint: string;
-  /** 换号时把上一账号的本地会话挂到新账号同一工作区 */
-  keep_sessions: boolean;
+  /** Trae 自身设置（settings.json 的 trae.* / AI.* 键与权限档位）是否全账号共用 */
+  share_trae_settings: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -606,7 +666,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   switch_scope: "all",
   http_proxy: "",
   update_endpoint: "",
-  keep_sessions: true,
+  share_trae_settings: true,
 };
 
 export async function getSettings(): Promise<AppSettings> {

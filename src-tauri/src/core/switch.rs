@@ -57,6 +57,7 @@ pub fn scan_current(ide: &IdeKind) -> io::Result<Option<AccountBundle>> {
         pinned: false,
         threshold: None,
         refresh_error: None,
+        trae_prefs: None,
         user_id: info.user_id,
     }))
 }
@@ -158,8 +159,10 @@ pub fn isolated_channel(account_id: &str) -> String {
 pub fn hot_switch_isolated(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) -> Result<String, String> {
     let channel = isolated_channel(account_id);
     let mid = current_machine_id(ide).ok_or("无法读取本机 machineId")?;
+    let dir = isolated_dir(account_id);
     hot_switch_via_shim_ch(ide, bundle, &mid, &channel)?;
     persist_after_hot_isolated(ide, account_id, bundle, &mid).map_err(|e| e.to_string())?;
+    apply_prefs_if_enabled(ide, Some(&dir), bundle);
     super::logger::log(
         super::logger::Level::Info,
         super::logger::Source::Switch,
@@ -358,53 +361,12 @@ pub fn hot_switch(ide: &IdeKind, bundle: &AccountBundle, preserved_machine_id: &
     Ok(result)
 }
 
-/// 返回 (提示, 是否已改挂)。Trae 运行中改挂成功时，对话服务已经在重启了。
-fn maybe_rebind_sessions(ide: IdeKind, from_user: &str, to_user: &str) -> (Option<String>, bool) {
-    if !super::settings::load().keep_sessions || from_user == to_user {
-        return (None, false);
-    }
-    match super::session_rebind::on_switch(ide, from_user, to_user) {
-        Ok(r) => {
-            let msg = r.summary();
-            super::logger::log(
-                super::logger::Level::Info,
-                super::logger::Source::Switch,
-                msg.clone(),
-            );
-            (Some(msg), true)
-        }
-        Err(e) => {
-            super::logger::log(
-                super::logger::Level::Warn,
-                super::logger::Source::Switch,
-                format!("对话未随号迁移：{e}"),
-            );
-            (Some(format!("对话未随号迁移：{e}")), false)
-        }
-    }
-}
-
-fn with_rebind_note(base: String, note: Option<String>) -> String {
-    match note {
-        Some(n) if !n.is_empty() => format!("{base}。{n}"),
-        _ => base,
-    }
-}
-
 /// 统一热换号编排（GUI/托盘/自动换号共用）：shim 主通道（TSW 补丁就绪）→ CDP 兜底；
 /// 成功后落盘设备态（persist_after_hot）并记录 current 账号
 pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) -> Result<String, String> {
     let paths = IdePaths::detect(*ide).ok_or("未检测到安装")?;
-    let keep = super::settings::load().keep_sessions;
-    let from_uid = scan_current(ide).ok().flatten().map(|a| a.user_id);
-    let want_rebind = keep && from_uid.as_deref().is_some_and(|u| u != bundle.user_id);
     // 热通道均依赖运行中的 IDE（shim 心跳=扩展宿主 / CDP=调试端口）；未运行时直接冷切换 + --inspect 重启，等效无感
     if !super::launcher::is_running(&paths) {
-        let rebind_note = if want_rebind {
-            maybe_rebind_sessions(*ide, from_uid.as_deref().unwrap_or(""), &bundle.user_id).0
-        } else {
-            None
-        };
         cold_switch(ide, bundle).map_err(|e| e.to_string())?;
         super::launcher::launch_with_inspect(&paths, super::launcher::inspect_port(*ide))
             .map_err(|e| e.to_string())?;
@@ -414,19 +376,11 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
             super::logger::Source::Switch,
             format!("切换到 {}（重启，--inspect）", bundle.name),
         );
-        return Ok(with_rebind_note("已切换登录态并重启 Trae".into(), rebind_note));
-    }
-    // 热换号前先把对话库密钥采下来（agent 还活着）；失败不阻断换号本身
-    if want_rebind {
-        if let Err(e) = super::agent_key::ensure_key(&paths) {
-            super::logger::log(
-                super::logger::Level::Warn,
-                super::logger::Source::Switch,
-                format!("对话库密钥未就绪：{e}"),
-            );
-        }
+        return Ok("已切换登录态并重启 Trae".into());
     }
     let mid = current_machine_id(ide).ok_or("无法读取本机 machineId")?;
+    // 切前先迁一次：目标账号在该工作区已有项目时，客户端换号后第一屏就能看到旧账号的会话
+    let _ = super::session_live::rebind(*ide, &bundle.user_id, std::time::Duration::ZERO);
     let (result, channel) = if super::shim::ready_for_hotswap(*ide) {
         (hot_switch_via_shim(ide, bundle, &mid), "shim")
     } else {
@@ -434,6 +388,16 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
     };
     let r = result
         .and_then(|r| persist_after_hot(ide, bundle, &mid).map(|_| r).map_err(|e| e.to_string()))?;
+    // 写回该账号的 Trae 设置（关闭「共用」时；settings.json 由客户端文件监听即时生效）
+    apply_prefs_if_enabled(ide, None, bundle);
+    // 目标账号的项目是换号后客户端才重建的：等它出现再迁一次（等不到就留在原账号）
+    if let Err(e) = super::session_live::rebind(*ide, &bundle.user_id, std::time::Duration::from_secs(10)) {
+        super::logger::log(
+            super::logger::Level::Info,
+            super::logger::Source::Switch,
+            format!("无感会话保留跳过：{e}"),
+        );
+    }
     // 设备寄存（ICDRS）未随号同步时显式告警：ICDRS 封在 ESM 闭包内，动态定位是死路，
     // 唯一通路是静态补丁暴露的 __sw_icdrs；未命中说明补丁不完整，必须重装后重启 Trae
     if r.get("deviceUpdated").and_then(|v| v.as_bool()) != Some(true) {
@@ -448,14 +412,6 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
     }
     // 运行中的热换号不改挂会话：改挂必须先停一次对话服务，而每次换号都重启会触发
     // 服务端 4011「操作过于频繁」，面板还会在重启空窗里落到「服务启动异常」。
-    // 会话改挂只在 Trae 未运行时（重启切换）执行，那条路径不需要停服。
-    if want_rebind {
-        super::logger::log(
-            super::logger::Level::Info,
-            super::logger::Source::Switch,
-            "无感换号不改挂会话（会话改挂仅在 Trae 未运行时执行）",
-        );
-    }
     super::vault::set_current_id(account_id);
     super::logger::log(
         super::logger::Level::Info,
@@ -469,7 +425,7 @@ pub fn hot_switch_full(ide: &IdeKind, bundle: &AccountBundle, account_id: &str) 
         }
         _ => "无感换号完成（备用通道轻量模式：设备寄存未随号同步，建议安装无感换号支持后使用切换助手）".into(),
     };
-    Ok(with_rebind_note(base, None))
+    Ok(base)
 }
 
 /// 续期后同步：若 storage.json 当前登录用户与目标一致，写入新凭据
@@ -489,6 +445,132 @@ pub fn sync_auth_if_same_user(ide: &IdeKind, user_id: &str, new_auth_blob: &str)
     sj.set_str(AUTH_KEY, new_auth_blob);
     sj.save()?;
     Ok(true)
+}
+
+// ============ Trae 自身设置（settings.json 的 trae.*/AI.* 键 + 权限档位）============
+
+/// 只有 Trae / AI 面板自己的配置键随号切换；编辑器与第三方扩展设置仍全账号共用
+const TRAE_PREF_PREFIXES: [&str; 2] = ["trae.", "AI."];
+
+fn is_trae_pref_key(k: &str) -> bool {
+    TRAE_PREF_PREFIXES.iter().any(|p| k.starts_with(p))
+}
+
+fn trae_settings_file(ide: &IdeKind, user_data: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    let base = match user_data {
+        Some(p) => p.to_path_buf(),
+        None => IdePaths::detect(*ide)?.user_data,
+    };
+    Some(base.join("User").join("settings.json"))
+}
+
+/// 账号级权限档位（Trae 用 ~/.trae，CN 用 ~/.trae-cn，与 shim 的扩展根一致）
+fn trae_permission_file(ide: &IdeKind) -> std::path::PathBuf {
+    let home = std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Users\Default"));
+    let root = match ide {
+        IdeKind::Trae => home.join(".trae"),
+        IdeKind::TraeCn => home.join(".trae-cn"),
+    };
+    root.join("permission").join("global.json")
+}
+
+/// 读成 JSON 对象；文件不存在 → Some(空)；存在但解析失败（带注释的 JSONC）→ None
+fn load_json_object(path: &std::path::Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if !path.exists() {
+        return Some(serde_json::Map::new());
+    }
+    let raw = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()?;
+    Some(v.as_object().cloned().unwrap_or_default())
+}
+
+/// 采集当前账号的 Trae 设置快照（仅关闭「共用」时调用）
+pub fn capture_trae_prefs(ide: &IdeKind, user_data: Option<&std::path::Path>) -> Option<serde_json::Value> {
+    let file = trae_settings_file(ide, user_data)?;
+    let mut settings = serde_json::Map::new();
+    if let Some(map) = load_json_object(&file) {
+        for (k, v) in map {
+            if is_trae_pref_key(&k) {
+                settings.insert(k, v);
+            }
+        }
+    }
+    let permission = std::fs::read_to_string(trae_permission_file(ide))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if settings.is_empty() && permission.is_none() {
+        return None;
+    }
+    Some(json!({ "settings": settings, "permission": permission }))
+}
+
+/// 写回目标账号的 Trae 设置：先清掉同前缀键再写入，避免残留上一号的值。
+/// settings.json 由客户端文件监听即时生效；权限档位落盘后最迟下次启动生效。
+pub fn apply_trae_prefs(
+    ide: &IdeKind,
+    user_data: Option<&std::path::Path>,
+    prefs: &Value,
+) -> io::Result<()> {
+    let file = trae_settings_file(ide, user_data)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IDE not installed"))?;
+    // JSONC（带注释）解析失败时宁可不写：重写会把用户整份设置冲掉
+    if let Some(mut cur) = load_json_object(&file) {
+        cur.retain(|k, _| !is_trae_pref_key(k));
+        if let Some(m) = prefs.get("settings").and_then(|v| v.as_object()) {
+            for (k, v) in m {
+                cur.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let text = serde_json::to_string_pretty(&serde_json::Value::Object(cur))?;
+        std::fs::write(&file, format!("{text}\n"))?;
+    }
+    if let Some(s) = prefs.get("permission").and_then(|v| v.as_str()) {
+        let p = trae_permission_file(ide);
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(p, format!("{}\n", s.trim()))?;
+    }
+    Ok(())
+}
+
+/// 把当前登录账号的 Trae 设置采集进它自己的账号包（仅关闭「共用」时）；返回是否写入。
+/// 手动换号在切走前调用；自动换号由 autoswitch 在切换前调用并回写账号库。
+pub fn capture_prefs_of_current(ide: &IdeKind, bundles: &mut [AccountBundle]) -> bool {
+    if super::settings::load().share_trae_settings {
+        return false;
+    }
+    let Ok(Some(cur)) = scan_current(ide) else { return false };
+    let Some(prefs) = capture_trae_prefs(ide, None) else { return false };
+    let id = format!("{}-{}", *ide as u8, cur.user_id);
+    match bundles.iter_mut().find(|b| b.id == id) {
+        Some(b) => {
+            b.trae_prefs = Some(prefs);
+            true
+        }
+        None => false,
+    }
+}
+
+/// 设置里开着「共用」时不写，等价于换号不动设置
+fn apply_prefs_if_enabled(ide: &IdeKind, user_data: Option<&std::path::Path>, bundle: &AccountBundle) {
+    if super::settings::load().share_trae_settings {
+        return;
+    }
+    let Some(prefs) = bundle.trae_prefs.as_ref() else { return };
+    if let Err(e) = apply_trae_prefs(ide, user_data, prefs) {
+        super::logger::log(
+            super::logger::Level::Warn,
+            super::logger::Source::Switch,
+            format!("Trae 设置写回失败（{}）：{e}", bundle.name),
+        );
+    }
 }
 
 /// 冷换号：备份后按“storage.json 最后写”原则替换登录态 + 随号身份
@@ -512,6 +594,8 @@ pub fn cold_switch(ide: &IdeKind, bundle: &AccountBundle) -> io::Result<()> {
         ts.restore_data(snapshot);
         ts.save()?;
     }
+    // ③ 写回该账号的 Trae 设置（关闭「共用」时；启动后生效）
+    apply_prefs_if_enabled(ide, None, bundle);
     Ok(())
 }
 

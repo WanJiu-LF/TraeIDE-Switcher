@@ -143,6 +143,11 @@ fn load_bundles() -> Vec<AccountBundle> {
 
 fn perform_switch(from_name: &str, to_name: &str, target: &AccountBundle, app: &tauri::AppHandle) {
     let msg_prefix = format!("自动换号：{from_name} → {to_name}");
+    // 关闭「Trae 设置共用」时，先把当前账号的设置快照写回账号库，再切换并写回目标账号的设置
+    let mut pool = load_bundles();
+    if switch::capture_prefs_of_current(&target.ide, &mut pool) {
+        let _ = crate::core::vault::save_json(&serde_json::json!({ "accounts": pool }));
+    }
     let t0 = Instant::now();
     let (ok, note) = match switch::hot_switch_full(&target.ide, target, &target.id) {
         Ok(_) => {

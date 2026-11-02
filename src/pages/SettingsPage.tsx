@@ -311,15 +311,6 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             onChange={(v) => apply({ switch_strategy: v })}
           />
         </Row>
-        <Row
-          title="换号保留对话"
-          desc="Trae 关闭时执行的切换会把上一账号的本地会话按原工作区接给新账号：在哪个文件夹聊的，换号后打开那个文件夹就能继续聊；无感换号不迁移会话。"
-        >
-          <Toggle
-            on={settings.keep_sessions}
-            onToggle={() => apply({ keep_sessions: !settings.keep_sessions })}
-          />
-        </Row>
         <Row title="换号范围" desc="参与自动换号的账号范围：全部账号，或仅置顶账号（可将常用账号置顶固定）">
           <Seg
             options={[
@@ -328,6 +319,15 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             ]}
             value={settings.switch_scope}
             onChange={(v) => apply({ switch_scope: v })}
+          />
+        </Row>
+        <Row
+          title="Trae 设置随账号切换"
+          desc="关闭后，settings.json 里的 trae.* / AI.* 键与权限档位按账号保存并在换号时写回（设置即时生效，权限档位最迟重启生效）；字号、主题等编辑器设置始终共用"
+        >
+          <Toggle
+            on={!settings.share_trae_settings}
+            onToggle={() => apply({ share_trae_settings: !settings.share_trae_settings })}
           />
         </Row>
         <Row title="自动换号阈值" desc="账号剩余额度低于此百分比时自动切换到下一个账号（单个账号可在编辑时单独设置）">

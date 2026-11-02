@@ -153,12 +153,6 @@ export function HealthPage({
           }
         />
         <Row
-          title="会话按账号归类"
-          desc="聊天记录与任务按账号分别归类；未安装时换号后会话记录会互相混淆"
-          state={status?.chatPinned ? "ok" : "warn"}
-          text={status?.chatPinned ? "已安装" : "未安装"}
-        />
-        <Row
           title="切换助手（无感换号通道）"
           desc={
             shim?.installed

@@ -64,7 +64,7 @@ export interface Account {
   checkin?: { checked: boolean; reward: number };
 }
 
-export type Page = "accounts" | "assets" | "logs" | "health" | "settings" | "about";
+export type Page = "accounts" | "transfer" | "assets" | "logs" | "health" | "settings" | "about";
 
 export interface ToastItem {
   id: string;
