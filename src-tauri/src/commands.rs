@@ -1687,7 +1687,12 @@ fn query_assets_impl(id: &str) -> CmdResult<String> {
         q!("activity", c.client.activity_info(&c.token, &c.device));
     }
     q!("billing", c.client.billing_history(&c.token, &c.device, 1, 20));
-    q!("products", c.client.sellable_products(&c.token, &c.device));
+    // 产品目录在国内网关已被禁用（2026-11-03 实测）：v2 路径 404 下线，v1 路径不带 token 也回
+    // 403「非法请求」（路径级拦截，与参数/鉴权无关）；国际版 v1 正常。CN 的订阅能力数据已由
+    // entitlement（user_entitlement_pack_list.quota）与 pay_status 覆盖，直接跳过避免每轮误报。
+    if c.bundle.ide != IdeKind::TraeCn {
+        q!("products", c.client.sellable_products(&c.token, &c.device));
+    }
     Ok(json!({
         "id": c.bundle.id,
         "name": c.bundle.name,
