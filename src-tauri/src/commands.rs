@@ -135,6 +135,43 @@ fn save_bundles(bundles: &[AccountBundle]) -> CmdResult<()> {
     vault::save_json(&v).map_err(err)
 }
 
+/// 入库/切换前设备唯一化：目标号缺 aha 设备、或与其他账号共用同一设备时铸造独立设备。
+/// 服务端按 aha 设备统计绑定账户数，共用设备会触发「该设备绑定的账户数量已达上限」。
+fn ensure_bundle_device(bundles: &mut [AccountBundle], id: &str) -> bool {
+    let taken: std::collections::BTreeSet<String> = bundles
+        .iter()
+        .filter(|b| b.id != id)
+        .filter_map(switch::device_id_str_of)
+        .collect();
+    match bundles.iter_mut().find(|b| b.id == id) {
+        Some(b) => switch::ensure_unique_device(b, &taken),
+        None => false,
+    }
+}
+
+/// 启动自愈：把历史遗留的共用设备拆开（同设备只留首个占用者，其余各铸造独立设备）
+pub fn repair_device_identities() -> usize {
+    let Ok(mut bundles) = load_bundles() else { return 0 };
+    let before: Vec<Option<String>> = bundles.iter().map(switch::device_id_str_of).collect();
+    let changed = switch::dedupe_devices(&mut bundles);
+    if changed > 0 {
+        if save_bundles(&bundles).is_ok() {
+            let after: Vec<Option<String>> = bundles.iter().map(switch::device_id_str_of).collect();
+            crate::core::logger::log(
+                crate::core::logger::Level::Info,
+                crate::core::logger::Source::Account,
+                format!(
+                    "设备身份自愈：{} 个账号已分配独立 aha 设备（{} -> {}）",
+                    changed,
+                    before.iter().filter(|x| x.is_some()).count(),
+                    after.iter().filter(|x| x.is_some()).count()
+                ),
+            );
+        }
+    }
+    changed
+}
+
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -189,6 +226,7 @@ fn import_local_account_impl(ide: &str, name: &str, note: &str) -> CmdResult<Acc
     bundle.note = note.to_string();
     let mut bundles = load_bundles()?;
     let replaced = upsert_bundle(&mut bundles, bundle.clone());
+    ensure_bundle_device(&mut bundles, &bundle.id);
     save_bundles(&bundles)?;
     let mut summary = to_summary(&bundle);
     summary.replaced = replaced;
@@ -308,6 +346,8 @@ fn add_account_impl(ide: &str, name: &str, note: &str, auth_blob: &str) -> CmdRe
     };
     let mut bundles = load_bundles()?;
     let replaced = upsert_bundle(&mut bundles, bundle.clone());
+    // 新入库账号若未携带设备、或与他号共用设备，立即分配独立 aha 设备
+    ensure_bundle_device(&mut bundles, &bundle.id);
     save_bundles(&bundles)?;
     let mut summary = to_summary(&bundle);
     summary.replaced = replaced;
@@ -1051,7 +1091,11 @@ fn capture_current_assets(bundles: &mut [AccountBundle]) {
             b.auth_blob = cur.auth_blob;
             b.usertag_blob = cur.usertag_blob;
             b.ecdsa_blobs = cur.ecdsa_blobs;
-            b.tiny_storage = cur.tiny_storage;
+            // 设备身份以账号包为准：已分配独立 aha 设备的号不能被"本机现值"覆盖回共用设备，
+            // 否则铸造出的唯一设备下一轮就被冲掉，又会撞「该设备绑定的账户数量已达上限」
+            if b.tiny_storage.is_none() {
+                b.tiny_storage = cur.tiny_storage;
+            }
             b.dev_device_id = cur.dev_device_id;
             b.sqm_id = cur.sqm_id;
         }
@@ -1135,6 +1179,11 @@ fn switch_account_impl(id: &str, hot: bool) -> CmdResult<String> {
     }
     // ② 当前登录账号最新资产回写，防覆盖丢失
     capture_current_assets(&mut bundles);
+    // ②' 设备唯一化：目标号若与他号共用 aha 设备（含旧版入库的快照），先铸造独立设备再切换，
+    //    否则服务端按设备累计绑定账户数，会返回「该设备绑定的账户数量已达上限」
+    if ensure_bundle_device(&mut bundles, id) {
+        save_bundles(&bundles)?;
+    }
     let b = bundles[idx].clone();
     let kind = b.ide;
     let paths = IdePaths::detect(kind).ok_or("未检测到安装")?;

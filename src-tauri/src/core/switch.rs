@@ -4,7 +4,7 @@ use super::model::{AccountBundle, AccountStatus};
 use super::paths::{IdeKind, IdePaths};
 use super::store::{StorageJson, TinyStorage, Vscdb};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 pub const AUTH_KEY: &str = "iCubeAuthInfo://icube.cloudide";
@@ -75,6 +75,71 @@ pub fn device_id_str_of(bundle: &AccountBundle) -> Option<String> {
         .get("device_id_str")?
         .as_str()
         .map(String::from)
+}
+
+/// 生成一份全新的 aha 设备身份（明文 JSON；字段与 Trae 原生 TinyStorage 一致）
+fn new_tiny_device() -> Value {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    // 19 位数字（服务端按该值统计设备绑定账户数，任意数字串均可，实测新值即解除 max_account）
+    let did = format!("1{:018}", rng.gen_range(0u64..1_000_000_000_000_000_000));
+    let iid = format!("1{:018}", rng.gen_range(0u64..1_000_000_000_000_000_000));
+    let uuid = format!(
+        "{:08X}-{:04X}-{:04X}-{:04X}-{:012X}",
+        rng.gen::<u32>(),
+        rng.gen::<u16>(),
+        rng.gen::<u16>(),
+        rng.gen::<u16>(),
+        rng.gen::<u64>() & 0xFFFF_FFFF_FFFF
+    );
+    json!({ "device_id_str": did, "install_id_str": iid, "uuid": uuid, "version": "1.2" })
+}
+
+/// 为该号铸造一份独立 aha 设备身份（写回 tiny_storage 快照），返回新的 device_id_str
+pub fn mint_device(bundle: &mut AccountBundle) -> Option<String> {
+    let dev = new_tiny_device();
+    let plain = serde_json::to_string(&dev).ok()?;
+    let enc = super::bytecrypto::encrypt_string(&plain);
+    let map = bundle
+        .tiny_storage
+        .get_or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()?;
+    map.insert(TINY_DEVICE_KEY.to_string(), Value::String(enc));
+    dev.get("device_id_str")?.as_str().map(String::from)
+}
+
+/// 设备身份唯一化：缺设备、或与他号共用同一 aha 设备时，铸造新设备。
+/// 返回是否发生了变更（调用方负责落盘）。
+pub fn ensure_unique_device(bundle: &mut AccountBundle, taken: &BTreeSet<String>) -> bool {
+    match device_id_str_of(bundle) {
+        Some(d) if !taken.contains(&d) => false,
+        _ => {
+            mint_device(bundle);
+            true
+        }
+    }
+}
+
+/// 全库去重：凡是被两个及以上账号共用的 aha 设备，**所有持有者**都改用独立设备
+/// （共用设备在服务端已累计绑定多号，留给其中任何一个都仍会撞「设备绑定账户已达上限」）。
+/// 返回被改动的账号数。
+pub fn dedupe_devices(bundles: &mut [AccountBundle]) -> usize {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for b in bundles.iter() {
+        if let Some(d) = device_id_str_of(b) {
+            *counts.entry(d).or_insert(0) += 1;
+        }
+    }
+    let mut changed = 0;
+    for b in bundles.iter_mut() {
+        let shared = device_id_str_of(b).map(|d| counts.get(&d).copied().unwrap_or(0) > 1);
+        if !matches!(shared, Some(false)) {
+            if mint_device(b).is_some() {
+                changed += 1;
+            }
+        }
+    }
+    changed
 }
 
 /// ECDSA 设备密钥指纹：sha256(键名 + publicKeyPEM) 前 16 hex。
@@ -262,7 +327,7 @@ fn persist_after_hot_with(
 
     if let Some(snapshot) = bundle.tiny_storage.clone() {
         let mut ts = TinyStorage::load_or_default(paths)?;
-        ts.restore_data(snapshot);
+        ts.merge_data(snapshot);
         ts.save()?;
     }
 
@@ -591,7 +656,7 @@ pub fn cold_switch(ide: &IdeKind, bundle: &AccountBundle) -> io::Result<()> {
 
     if let Some(snapshot) = bundle.tiny_storage.clone() {
         let mut ts = TinyStorage::load_or_default(&paths)?;
-        ts.restore_data(snapshot);
+        ts.merge_data(snapshot);
         ts.save()?;
     }
     // ③ 写回该账号的 Trae 设置（关闭「共用」时；启动后生效）
@@ -633,7 +698,7 @@ pub fn prepare_isolated_data(ide: &IdeKind, bundle: &AccountBundle) -> io::Resul
 
     if let Some(snapshot) = bundle.tiny_storage.clone() {
         let mut ts = TinyStorage::load_or_default_at(dir.join("aha").join("TinyStorage"))?;
-        ts.restore_data(snapshot);
+        ts.merge_data(snapshot);
         ts.save()?;
     }
     Ok(dir)

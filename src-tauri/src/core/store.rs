@@ -127,6 +127,24 @@ impl TinyStorage {
         }
     }
 
+    /// 按键覆盖合并快照：只覆盖快照里出现的键，保留本机其余 TinyStorage 项。
+    /// 用于「只补设备身份」这类部分快照，避免把整张表冲掉。
+    pub fn merge_data(&mut self, snapshot: Value) {
+        let Some(src) = snapshot.as_object().cloned() else { return };
+        let data = self
+            .root
+            .entry("tiny_storage_data")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !data.is_object() {
+            *data = Value::Object(Map::new());
+        }
+        if let Some(dst) = data.as_object_mut() {
+            for (k, v) in src {
+                dst.insert(k, v);
+            }
+        }
+    }
+
     pub fn get_decrypted(&self, key: &str) -> Option<String> {
         let enc = self.data_map().get(key)?.as_str()?;
         bytecrypto::decrypt_string(enc).ok()

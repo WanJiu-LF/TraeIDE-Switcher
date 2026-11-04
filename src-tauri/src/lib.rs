@@ -77,6 +77,9 @@ pub fn run() {
             );
             let handle = app.handle().clone();
             std::thread::spawn(move || crate::core::autoswitch::run(handle));
+            // 设备身份自愈：拆开历史上与他号共用的 aha 设备（服务端按设备计账户数）。
+            // 必须在界面读账号列表之前完成，否则前端拿到的是旧设备号。
+            commands::repair_device_identities();
             tray::setup(app.handle())?;
             // 关闭到托盘：CloseRequested 拦截为隐藏
             if let Some(win) = tauri::Manager::get_webview_window(app, "main") {
