@@ -1,6 +1,6 @@
 [package]
 name = "traeide-switcher"
-version = "0.1.26"
+version = "0.1.27"
 description = "TraeIDE-Switcher — Trae / Trae CN 多账号切换器"
 edition = "2021"
 
