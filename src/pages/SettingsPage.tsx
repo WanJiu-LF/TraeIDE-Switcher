@@ -184,8 +184,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
       .catch(() => setPaths({ trae: "", "trae-cn": "" }));
   }, [targetIde]);
 
-  const pathDesc = (p: string | undefined) =>
-    p ? `已自动找到：${p}` : "未找到安装位置，请手动填写";
+  const pathDesc = (p: string | undefined) => (p ? p : "未找到，请手动填写");
 
   useEffect(() => {
     getSettings()
@@ -287,8 +286,8 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
   const perMin = Math.round(perRound / Math.max(1, settings.refresh_interval));
   const intervalDesc =
     accounts.length === 0
-      ? "自动刷新全部账号额度、凭据状态与增值数据的间隔；同时用于自动换号判定"
-      : `自动刷新全部账号额度、凭据状态与增值数据的间隔；同时用于自动换号判定。当前 ${accounts.length} 个账号（CN ${cnN} · 国际版 ${intlN}），每轮约 ${perRound} 个请求、约 ${perMin} 个/分钟`;
+      ? "同时用于自动换号判定"
+      : `当前 ${accounts.length} 个账号，每轮约 ${perRound} 个请求（约 ${perMin}/分钟）`;
 
   return (
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
@@ -298,10 +297,10 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
       </div>
 
       <div className="panel mb-4">
-        <Row title="自动换号" desc="账号额度耗尽时自动切换到下一个可用账号，无需手动操作">
+        <Row title="自动换号" desc="额度耗尽时自动切换">
           <Toggle on={settings.auto_switch} onToggle={() => apply({ auto_switch: !settings.auto_switch })} />
         </Row>
-        <Row title="换号策略" desc="额度耗尽后切换到的账号：按添加顺序轮换，或优先选择剩余额度最多的账号">
+        <Row title="换号策略" desc="按顺序轮换，或优先剩余最多">
           <Seg
             options={[
               { value: "order", label: "按顺序轮换" },
@@ -311,7 +310,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             onChange={(v) => apply({ switch_strategy: v })}
           />
         </Row>
-        <Row title="换号范围" desc="参与自动换号的账号范围：全部账号，或仅置顶账号（可将常用账号置顶固定）">
+        <Row title="换号范围" desc="全部账号，或仅置顶账号">
           <Seg
             options={[
               { value: "all", label: "全部账号" },
@@ -321,16 +320,13 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             onChange={(v) => apply({ switch_scope: v })}
           />
         </Row>
-        <Row
-          title="Trae 设置随账号切换"
-          desc="关闭后，settings.json 里的 trae.* / AI.* 键与权限档位按账号保存并在换号时写回（设置即时生效，权限档位最迟重启生效）；字号、主题等编辑器设置始终共用"
-        >
+        <Row title="Trae 设置随账号切换" desc="关闭后按账号保存 trae.* / AI.* 与权限档位">
           <Toggle
             on={!settings.share_trae_settings}
             onToggle={() => apply({ share_trae_settings: !settings.share_trae_settings })}
           />
         </Row>
-        <Row title="自动换号阈值" desc="账号剩余额度低于此百分比时自动切换到下一个账号（单个账号可在编辑时单独设置）">
+        <Row title="自动换号阈值" desc="剩余低于该百分比视为耗尽">
           <Seg
             options={[
               { value: 0, label: "0%" },
@@ -359,14 +355,14 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
       <div className="panel mb-4">
         {/* 每日定时签名为 CN 专有活动，国际版不展示该设置 */}
         {targetIde === "trae-cn" && (
-          <Row title="每日定时签到" desc="到达设定时间时自动为全部 Trae CN 账号签到">
+          <Row title="每日定时签到" desc="到点为全部 CN 账号签到">
             <Toggle on={settings.daily_checkin} onToggle={() => apply({ daily_checkin: !settings.daily_checkin })} />
           </Row>
         )}
-        <Row title="每日定时刷新额度" desc="到达设定时间时自动刷新全部账号额度，并记录消耗趋势">
+        <Row title="每日定时刷新额度" desc="到点刷新全部账号额度">
           <Toggle on={settings.daily_refresh} onToggle={() => apply({ daily_refresh: !settings.daily_refresh })} />
         </Row>
-        <Row title="定时执行时刻" desc="按本机时间执行，格式 HH:MM；每天执行一次">
+        <Row title="定时执行时刻" desc="本机时间 HH:MM，每天一次">
           <input
             className="input w-[110px] text-center"
             value={settings.daily_time}
@@ -380,15 +376,15 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">账号库备份与恢复</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">
-            导出的是加密备份文件，仅可在本机、当前 Windows 用户下恢复；每次改动账号库前，自动保留上一版备份。
+            加密备份仅本机、当前 Windows 用户可恢复；改动前自动保留上一版。
           </div>
         </div>
-        <Row title="导出备份" desc={backups.length ? `已有 ${backups.length} 份备份` : "尚无备份"}>
+        <Row title="导出备份" desc={backups.length ? `${backups.length} 份备份` : "尚无备份"}>
           <button className="btn-primary" disabled={backupBusy} onClick={runExport}>
             <IconDownload /> {backupBusy ? "处理中…" : "导出当前账号库"}
           </button>
         </Row>
-        <Row title="从备份恢复" desc="以选中的备份覆盖当前账号库；覆盖前自动保留当前版本">
+        <Row title="从备份恢复" desc="覆盖前自动保留当前版本">
           <Select
             className="w-[240px]"
             value={backupSel}
@@ -408,12 +404,12 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
 
       <div className="panel mb-4">
         <div className="px-[22px] py-4 border-b border-line-soft">
-          <div className="text-[13px] font-semibold">账号包导入导出（跨机迁移）</div>
+          <div className="text-[13px] font-semibold">账号包导入导出</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">
-            以口令重新加密账号库（含凭据与设备资产），可在任意 Windows 机器或用户下用同一口令恢复；口令遗失无法找回。
+            口令加密，可跨机恢复；口令遗失无法找回。
           </div>
         </div>
-        <Row title="口令" desc="至少 6 位；导出与导入必须使用同一口令">
+        <Row title="口令" desc="至少 6 位，导入导出一致">
           <input
             className="input w-[220px]"
             type="password"
@@ -435,7 +431,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         <div className="px-[22px] py-4">
           <div className="text-[13px] font-semibold">导入账号包</div>
           <div className="text-[11.5px] text-ink3 mt-0.5 mb-2">
-            粘贴账号包内容，或填写账号包文件路径；导入将覆盖当前账号库（原库自动轮转为 accounts.bak）。
+            粘贴内容或填写路径；导入将覆盖当前账号库（原库自动轮转为 accounts.bak）。
           </div>
           <textarea
             className="input w-full h-[96px] font-mono text-[11px] resize-none"
@@ -466,11 +462,9 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
       <div className="panel mb-4">
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">网络与更新</div>
-          <div className="text-[11.5px] text-ink3 mt-0.5">
-            仅支持 http / https 代理；本机回环请求（如调试端口）始终直连，不经过代理。
-          </div>
+          <div className="text-[11.5px] text-ink3 mt-0.5">仅支持 http/https 代理；本机回环直连。</div>
         </div>
-        <Row title="HTTP 代理" desc="额度、签到、活动、登录、自动更新等全部对外请求经此代理；留空为直连">
+        <Row title="HTTP 代理" desc="对外请求统一走此代理；留空直连">
           <input
             className="input w-[300px]"
             value={settings.http_proxy}
@@ -479,7 +473,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             onChange={(e) => apply({ http_proxy: e.target.value })}
           />
         </Row>
-        <Row title="自定义更新源" desc="留空使用内置源（国内镜像 → GitHub 自动回退）；填写 latest.json 完整地址则排在最前，失败仍回退内置源">
+        <Row title="自定义更新源" desc="留空用内置源；填写后优先，失败回落">
           <input
             className="input w-[300px]"
             value={settings.update_endpoint}
@@ -491,13 +485,13 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
       </div>
 
       <div className="panel mb-4">
-        <Row title="开机自启" desc="开机时自动启动并最小化至托盘">
+        <Row title="开机自启" desc="启动后最小化到托盘">
           <Toggle on={settings.auto_start} onToggle={toggleAutoStart} />
         </Row>
-        <Row title="关闭到托盘" desc="点击关闭按钮时仅隐藏窗口，后台继续自动换号">
+        <Row title="关闭到托盘" desc="关闭按钮只隐藏窗口，后台继续自动换号">
           <Toggle on={settings.close_to_tray} onToggle={() => apply({ close_to_tray: !settings.close_to_tray })} />
         </Row>
-        <Row title="系统通知" desc="自动换号、额度耗尽或出错时弹出系统通知提醒">
+        <Row title="系统通知" desc="自动换号与错误提醒">
           <Toggle on={settings.notifications} onToggle={() => apply({ notifications: !settings.notifications })} />
         </Row>
       </div>
@@ -510,7 +504,6 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             placeholder={paths?.trae || "自动检测"}
             onChange={(e) => apply({ trae_path: e.target.value })}
           />
-          <button className="btn-ghost">浏览…</button>
         </Row>
         <Row title="Trae CN 安装路径" desc={pathDesc(paths?.["trae-cn"])}>
           <input
@@ -519,7 +512,6 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             placeholder={paths?.["trae-cn"] || "自动检测"}
             onChange={(e) => apply({ trae_cn_path: e.target.value })}
           />
-          <button className="btn-ghost">浏览…</button>
         </Row>
       </div>
 
@@ -527,7 +519,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">无感换号通道</div>
           <div className="text-[11.5px] text-ink3 mt-0.5">
-            「无感换号支持 + 切换助手」为推荐组合：先安装无感换号支持，再安装切换助手，重启 Trae 后即可无感换号；若无感换号支持文件未安装成功，将自动转为备用通道（需从本换号器启动 Trae）。安装时需以管理员身份运行本软件，并先关闭 Trae。
+            先装无感换号支持，再装切换助手，重启 Trae 生效；安装需管理员权限并先关闭 Trae。
           </div>
         </div>
         <Row title="无感换号支持状态" desc={`当前针对：${targetIde === "trae-cn" ? "Trae CN" : "Trae"}`}>
@@ -551,7 +543,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
             {busy === "remove" ? "处理中…" : "卸载无感换号支持"}
           </button>
         </Row>
-        <Row title="切换助手" desc="无感换号主要依赖它，随 Trae 常驻后台，显示在线即可使用">
+        <Row title="切换助手" desc="在线即可无感换号">
           <span
             className={shim?.installed && shim.alive ? "chip chip-accent" : "chip chip-neutral"}
           >
@@ -563,7 +555,7 @@ export function SettingsPage({ targetIde, accounts, onToast, onSettings, onReloa
         </Row>
         <div className="flex items-center px-[22px] py-4">
           <button className="btn-ghost" onClick={runLaunch}>
-            启动 Trae（无感换号的备用方式）
+            启动 Trae
           </button>
         </div>
       </div>

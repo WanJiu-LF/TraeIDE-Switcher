@@ -344,10 +344,10 @@ export function AccountCard({
       action: () => onSwitchIsolated?.(account.id),
       disabled: !canSwitchIsolated,
       title: canSwitchIsolated
-        ? "在该账号的独立实例内无感换号（不影响主实例）"
+        ? "在独立实例中无感换号"
         : account.instanceExists
-          ? "该账号的独立实例未在运行，先用「多开（独立实例）」启动"
-          : "该账号尚未多开过，先用「多开（独立实例）」启动",
+          ? "先启动该账号的独立实例"
+          : "尚未多开该账号",
     },
     { label: "重新登录采集", action: () => onRelogin?.() },
     { label: "刷新额度", action: () => onRefresh(account.id) },
@@ -461,7 +461,7 @@ export function AccountCard({
         {account.instanceAlive && (
           <span
             className="chip chip-accent"
-            title="该账号的独立实例正在运行，可在实例内无感换号（不影响主实例）"
+            title="该账号的独立实例正在运行"
           >
             独立实例运行中
           </span>
@@ -473,7 +473,7 @@ export function AccountCard({
           className="mt-2 text-[10.5px] text-bad bg-[#fdeeee] border border-[#f6cfcf] rounded-[8px] px-2 py-1.5 leading-snug break-all"
           title={account.errorText}
         >
-          额度查询失败，可稍后使用“刷新额度”重试：{account.errorText.length > 180 ? `${account.errorText.slice(0, 180)}…` : account.errorText}
+          查询失败：{account.errorText.length > 180 ? `${account.errorText.slice(0, 180)}…` : account.errorText}
         </div>
       )}
 
@@ -482,16 +482,16 @@ export function AccountCard({
           className="mt-2 text-[10.5px] text-[#b8860b] bg-[#fff8e6] border border-[#f0dca6] rounded-[8px] px-2 py-1.5 leading-snug break-all"
           title={account.refreshError ?? undefined}
         >
-          续期失败：refreshToken 与本机设备不匹配（20403），需在本机重新登录采集该账号
+          设备不匹配（20403），需重新登录采集
         </div>
       ) : account.credExpired ? (
         <div className="mt-2 text-[10.5px] text-bad bg-[#fdeeee] border border-[#f6cfcf] rounded-[8px] px-2 py-1.5 leading-snug">
-          凭据已过期，无法自动续期，需重新登录采集
+          凭据已过期，需重新登录采集
         </div>
       ) : (
         expiringSoon && (
           <div className="mt-2 text-[10.5px] text-[#b8860b] bg-[#fff8e6] border border-[#f0dca6] rounded-[8px] px-2 py-1.5 leading-snug">
-            凭据将于约 {expLeftMin} 分钟后到期，请留意自动续期结果
+            约 {expLeftMin} 分钟后到期
           </div>
         )
       )}
@@ -531,9 +531,11 @@ export function AccountCard({
       )}
 
       <div className="mt-auto pt-2.5">
-        <div className="text-[10.5px] text-ink3">
-          {account.credits ? "按积分计算，不同模型消耗不同" : resetText(account.resetAt) || account.resetText}
-        </div>
+        {(resetText(account.resetAt) || account.resetText) && (
+          <div className="text-[10.5px] text-ink3">
+            {resetText(account.resetAt) || account.resetText}
+          </div>
+        )}
 
         {!current && (
           <button

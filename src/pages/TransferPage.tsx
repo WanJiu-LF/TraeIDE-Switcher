@@ -124,19 +124,18 @@ export function TransferPage({ targetIde, running, onToast }: TransferPageProps)
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
       <div className="flex items-center mb-[18px]">
         <h3 className="text-[17px] font-bold">会话迁移</h3>
-        <div className="text-[12px] text-ink3 ml-3">把其他账号的本地会话转到当前登录账号</div>
       </div>
 
       <div className="panel mb-4">
         <Row
           title="目标版本"
-          desc={`迁移作用于 ${ideLabel} 自己的对话库，与其他版本互不影响`}
+          desc={`仅作用于 ${ideLabel} 自己的对话库`}
         >
           <span className="chip chip-neutral">{ideLabel}</span>
         </Row>
         <Row
           title="当前登录账号"
-          desc={current ? "会话将挂到这个账号名下，原账号不再持有" : "未检测到登录态：请先在 Trae 中登录后返回本页"}
+          desc={current ? "会话将挂到该账号" : "未检测到登录态"}
         >
           <span className={current ? "chip chip-accent" : "chip chip-neutral"}>
             {current ? current.name : "未登录"}
@@ -144,7 +143,7 @@ export function TransferPage({ targetIde, running, onToast }: TransferPageProps)
         </Row>
         <Row
           title="IDE 运行状态"
-          desc={running ? "迁移需要独占对话库，请完全退出后再执行" : "已退出，可以执行迁移"}
+          desc={running ? "需先完全退出 Trae" : "已退出，可以执行迁移"}
         >
           <span className={running ? "chip chip-warn" : "chip chip-accent"}>{running ? "运行中" : "未运行"}</span>
         </Row>
@@ -160,8 +159,8 @@ export function TransferPage({ targetIde, running, onToast }: TransferPageProps)
                 : candErr
                   ? candErr
                   : cands.length
-                    ? `其他账号共 ${cands.length} 条会话，其中 ${migratableCount} 条可迁移；已选 ${selIds.length} 条`
-                    : "没有其他账号的会话"}
+                    ? `其他账号 ${cands.length} 条 · 可迁移 ${migratableCount} · 已选 ${selIds.length}`
+                    : "无其他账号会话"}
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2 shrink-0">
@@ -212,7 +211,7 @@ export function TransferPage({ targetIde, running, onToast }: TransferPageProps)
         )}
         <div className="flex items-center px-[22px] py-3">
           <div className="text-[11.5px] text-ink3">
-            置灰会话表示当前账号还没在该工作区打开过文件夹，本次跳过；整库迁移只迁可落位的会话
+            置灰：当前账号未打开过该工作区，本次跳过
           </div>
           <div className="ml-auto flex items-center gap-2 shrink-0">
             <button className="btn-ghost" disabled={!canRun} onClick={() => void runTransfer()}>
@@ -232,17 +231,17 @@ export function TransferPage({ targetIde, running, onToast }: TransferPageProps)
       <div className="panel mb-4">
         <div className="px-[22px] py-4 border-b border-line-soft">
           <div className="text-[13px] font-semibold">迁移规则</div>
-          <div className="text-[11.5px] text-ink3 mt-0.5">
-            无感换号时已自动完成会话保留（运行中直接改挂，不用退出 {ideLabel}）；本页用于 {ideLabel} 已退出、或目标工作区
-            尚未在新账号下打开过时的迁移。会话按原工作区对位：只有当前账号已经打开过同一文件夹（该工作区下已有项目）
-            才会迁过去，找不到的留在原账号；不会新建项目，也不会改动消息内容。选择列表里的勾选项可只迁指定会话，
-            「全部迁移」等同于勾选所有可迁移会话。首次使用需在 {ideLabel} 运行时点一次迁移以采集对话库密钥，
-            之后退出 {ideLabel} 再迁移。每次迁移前自动整库备份对话库，可用下方回滚。
+          <div className="text-[11.5px] text-ink3 mt-0.5 leading-relaxed">
+            按工作区对位；当前账号没打开过的文件夹，会话留在原账号。
+            <br />
+            不新建项目、不改消息；迁移前自动整库备份，可用下方回滚。
+            <br />
+            首次使用需在 {ideLabel} 运行时点一次迁移以采集对话库密钥。
           </div>
         </div>
         <Row
           title="回滚到备份"
-          desc={backups.length ? `已有 ${backups.length} 份对话库备份` : "尚无对话库备份（每次迁移前自动生成）"}
+          desc={backups.length ? `${backups.length} 份备份` : "暂无备份（迁移前自动生成）"}
         >
           <Select
             className="w-[260px]"

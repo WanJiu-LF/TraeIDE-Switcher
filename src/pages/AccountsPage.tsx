@@ -44,7 +44,7 @@ function StatCard({
 }: {
   label: string;
   value: string;
-  sub: string;
+  sub?: string;
   highlight?: boolean;
   mono?: boolean;
 }) {
@@ -65,9 +65,11 @@ function StatCard({
       >
         {value}
       </div>
-      <div className="text-[11px] text-ink3 mt-[3px] truncate" title={sub}>
-        {sub}
-      </div>
+      {sub && (
+        <div className="text-[11px] text-ink3 mt-[3px] truncate" title={sub}>
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
@@ -157,7 +159,6 @@ export function AccountsPage(props: AccountsPageProps) {
     0,
   );
   const resetValue = isCn ? (businessExpire ? businessExpire.slice(0, 10).replace(/-/g, "/") : "—") : resetTs > 0 ? stamp(resetTs) : "—";
-  const resetSub = isCn ? "积分按活动到期时间失效" : "按订阅周期重置（最早到期账号）";
   // 凭据异常聚合：已过期（不可自愈）/ 设备不匹配（20403，换机后必现）
   const expiredN = pool.filter((a) => a.credExpired).length;
   const mismatchN = pool.filter((a) => a.deviceMismatch).length;
@@ -192,28 +193,26 @@ export function AccountsPage(props: AccountsPageProps) {
           value={current ? current.name : "—"}
           sub={runtimeSub}
         />
-        <StatCard label="账号总数" value={String(pool.length)} sub={`${isCn ? "Trae CN" : "Trae"} 账号`} />
+        <StatCard label="账号总数" value={String(pool.length)} />
         <StatCard
           label="剩余总量"
           value={isCn ? `${fmtRemain(poolRemain)} 积分` : fmtRemain(poolRemain)}
-          sub={isCn ? "全部 CN 账号积分合计" : "全部账号基础额度 + 赠送额度合计"}
         />
-        <StatCard label="下次额度重置" value={resetValue} sub={resetSub} />
+        <StatCard label="下次额度重置" value={resetValue} sub={isCn ? "按活动到期" : "按订阅周期"} />
       </div>
 
       {credIssue > 0 && (
         <div className="dropdown-in flex flex-wrap items-center gap-x-3 gap-y-1 mb-4 px-3.5 py-2.5 rounded-[10px] border border-[#f0dca6] bg-[#fff8e6] text-[12px] text-[#b8860b]">
           <span className="font-semibold">凭据异常 {credIssue} 个</span>
-          {expiredN > 0 && <span>· 已过期 {expiredN} 个（无法自动续期）</span>}
-          {mismatchN > 0 && <span>· 设备不匹配 {mismatchN} 个（需在本机重新登录采集）</span>}
-          <span className="text-ink3">在账号卡片上可查看具体原因</span>
+          {expiredN > 0 && <span>· 已过期 {expiredN} 个</span>}
+          {mismatchN > 0 && <span>· 设备不匹配 {mismatchN} 个</span>}
         </div>
       )}
 
       {instanceN > 0 && (
         <div className="dropdown-in flex flex-wrap items-center gap-x-3 gap-y-1 mb-4 px-3.5 py-2.5 rounded-[10px] border border-accent-line bg-accent-soft text-[12px] text-accent">
           <span className="font-semibold">独立实例运行中 {instanceN} 个</span>
-          <span className="text-ink3">在对应账号卡片的「···」里选「在独立实例中切换」，可在实例内换号（不影响主实例）</span>
+          <span className="text-ink3">在卡片「···」中切换</span>
         </div>
       )}
 
@@ -330,7 +329,6 @@ export function AccountsPage(props: AccountsPageProps) {
             <IconSearch className="w-7 h-7" />
           </div>
           <div className="text-[14px] font-semibold">账号池为空</div>
-          <div className="text-[12px] text-ink3">添加首个账号，开始管理多个 Trae 账号</div>
           <div className="flex gap-2.5 mt-2">
             <button className="btn-primary" onClick={() => onAdd({ tab: "paste" })}>
               粘贴 Token 添加

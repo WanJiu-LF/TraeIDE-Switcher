@@ -110,8 +110,8 @@ export function LogsPage({ onToast }: LogsPageProps) {
         </div>
         <div className="text-[12px] text-ink3 ml-3">
           {view === "logs"
-            ? `软件运行过程记录，可用于排查问题 · 共 ${logs.length} 条 · 保留 30 天`
-            : `每次换号的存档记录 · 共 ${records.length} 次 · 成功 ${okCount} · 失败 ${records.length - okCount}`}
+            ? `共 ${logs.length} 条 · 保留 30 天`
+            : `共 ${records.length} 次 · 成功 ${okCount}`}
         </div>
       </div>
 
@@ -147,9 +147,6 @@ export function LogsPage({ onToast }: LogsPageProps) {
                 ...sources.map((s) => ({ value: s, label: `来源：${SOURCE_TEXT[s]}` })),
               ]}
             />
-            <span className="input w-auto flex-none font-sans text-ink3">
-              时间：今天
-            </span>
             <button className="btn-ghost ml-auto" onClick={handleExport}>
               <IconDownload /> 导出日志
             </button>
@@ -157,7 +154,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
 
           <div className="panel overflow-hidden">
             {visible.length === 0 ? (
-              <div className="h-[200px] flex items-center justify-center text-[12.5px] text-ink3">无匹配记录，可清空搜索条件或将级别、来源筛选改为“全部”</div>
+              <div className="h-[200px] flex items-center justify-center text-[12.5px] text-ink3">无匹配记录</div>
             ) : (
               visible.map((l) => (
                 <div key={l.id} className="flex items-center gap-3 px-[18px] py-[11px] border-b border-line-soft last:border-b-0">
@@ -176,7 +173,7 @@ export function LogsPage({ onToast }: LogsPageProps) {
         <div className="panel overflow-hidden">
           {history.length === 0 ? (
             <div className="h-[200px] flex items-center justify-center text-[12.5px] text-ink3">
-              暂无换号记录。每次手动或自动换号成功后，此处将保留一条记录
+              暂无换号记录
             </div>
           ) : (
             history.map((r, i) => (

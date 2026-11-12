@@ -94,11 +94,8 @@ export function HealthPage({
     <div className="page-in flex-1 min-w-0 p-6 overflow-y-auto">
       <div className="flex items-center mb-[18px]">
         <h3 className="text-[17px] font-bold">运行检查</h3>
-        <span className="text-[12px] text-ink3 ml-3">
-          换号所需条件，逐项检查 · {targetIde === "trae-cn" ? "Trae CN" : "Trae 国际版"}
-        </span>
         <span className="ml-auto text-[11px] text-ink3">
-          {at ? `自动刷新于 ${new Date(at).toLocaleTimeString("zh-CN", { hour12: false })}` : "后台检查中…"}
+          {at ? `刷新于 ${new Date(at).toLocaleTimeString("zh-CN", { hour12: false })}` : "后台检查中…"}
         </span>
         <button className="btn-ghost ml-2.5" disabled={busy !== null} onClick={() => void onRefresh()}>
           <IconRefresh /> 立即刷新
@@ -108,13 +105,13 @@ export function HealthPage({
       <div className="panel stagger-in mb-4">
         <Row
           title="Trae 安装位置"
-          desc={installPath || "未找到 Trae 安装位置，请在设置中选择 Trae 目录"}
+          desc={installPath || "未找到，请在设置中指定"}
           state={installed ? "ok" : "bad"}
           text={installed ? "已找到" : "未找到"}
         />
         <Row
           title="Trae 是否正在运行"
-          desc={installed ? "未运行不影响安装无感换号支持与修改设置，但无法无感换号" : "需先安装 Trae"}
+          desc={running ? "运行中" : "未运行无法无感换号"}
           state={running ? "ok" : "warn"}
           text={running ? "正在运行" : "未运行"}
           action={
@@ -129,7 +126,7 @@ export function HealthPage({
         />
         <Row
           title="登录状态"
-          desc={status?.currentId ? `当前账号：${status.currentId}` : "未读取到登录态，请先启动 Trae 并登录"}
+          desc={status?.currentId ? `当前账号：${status.currentId}` : "启动并登录后读取"}
           state={status?.loggedIn ? "ok" : "warn"}
           text={status?.loggedIn ? "已登录" : "未登录"}
         />
@@ -138,14 +135,14 @@ export function HealthPage({
       <div className="panel stagger-in mb-4">
         <Row
           title="无感换号支持文件"
-          desc="安装至 Trae 安装目录，Trae 运行中即可直接换号，并同步账号的设备身份"
+          desc="写入安装目录，运行中直接换号"
           state={status?.tswPatched ? (status?.stalePatch ? "warn" : "ok") : "bad"}
           text={status?.tswPatched ? (status?.stalePatch ? "已安装未生效" : "已安装") : "未安装"}
           action={
             <button
               className="btn-primary"
               disabled={!installed || running || busy !== null}
-              title={running ? "Trae 正在运行，请先关闭 Trae 再安装" : "将写入 Trae 安装目录，需管理员权限"}
+              title={running ? "请先关闭 Trae" : "写入安装目录，需管理员权限"}
               onClick={() => void run("inject", () => injectBridge(targetIde), "无感换号支持已安装")}
             >
               {busy === "inject" ? "安装中…" : "安装无感换号支持"}
@@ -176,7 +173,7 @@ export function HealthPage({
         />
         <Row
           title="备用通道"
-          desc="未安装无感换号支持时的备用方案；需由本应用启动 Trae 后可用"
+          desc="需从本应用启动 Trae"
           state={status?.cdpReady ? "ok" : "unknown"}
           text={status?.cdpReady ? "可用" : "不可用"}
         />
@@ -185,9 +182,9 @@ export function HealthPage({
       <div className="panel stagger-in">
         <Row
           title="无感换号支持是否已生效"
-          desc="检查已安装的文件是否已在 Trae 中生效"
+          desc="补丁是否已加载"
           state={status?.stalePatch ? "warn" : injected ? "ok" : "unknown"}
-          text={status?.stalePatch ? "安装时间晚于 Trae 启动，需重启 Trae" : injected ? "已生效" : "未生效"}
+          text={status?.stalePatch ? "安装时间晚于 Trae 启动，需重启" : injected ? "已生效" : "未生效"}
         />
         <div className="flex items-center gap-2.5 px-[22px] py-4">
           <button
@@ -200,13 +197,13 @@ export function HealthPage({
           <button
             className="btn-ghost"
             disabled={!installed || running || busy !== null}
-            title="从安装目录移除全部无感换号支持文件，供升级 Trae 前或排查异常时使用"
+            title="从安装目录移除全部无感换号支持文件"
             onClick={() => void run("uninject", () => removeBridge(targetIde), "无感换号支持已移除")}
           >
             {busy === "uninject" ? "移除中…" : "移除无感换号支持"}
           </button>
           <span className="ml-auto text-[11px] text-ink3">
-            升级 Trae 会覆盖安装目录，无感换号支持文件与切换助手均需重新安装
+            升级 Trae 会覆盖安装目录，需重新安装
           </span>
         </div>
       </div>

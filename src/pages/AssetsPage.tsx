@@ -46,7 +46,7 @@ interface AssetsPageProps {
 
 // ── 活动中文名与说明（activity_id 为服务端口径，此处做面向用户的转译） ──
 const ACTIVITIES: Record<string, { name: string; note: string }> = {
-  checkin_credits: { name: "每日签到", note: "每天可领取一次，通过账号卡片上的「一键签到」领取" },
+  checkin_credits: { name: "每日签到", note: "每日一次，卡片上签到" },
   new_user_credits: { name: "新用户奖励", note: "注册后自动发放，无需手动领取" },
   send_message_reward: { name: "发消息奖励", note: "在 Trae 中首次发消息后自动发放" },
   code_fission_202609: { name: "代码分享奖励", note: "需要账号具备代码活动资格，且使用非 Work 版客户端" },
@@ -747,9 +747,6 @@ export function AssetsPage({
         >
           {targetIde === "trae" ? "Trae 国际版" : "Trae CN"}
         </span>
-        <span className="text-[12px] text-ink3 ml-3">
-          {isCn ? "积分、会话用量、活动奖励、订阅能力、设备身份" : "额度、会话用量、订阅能力、设备身份"}
-        </span>
       </div>
 
       <div className="flex items-center gap-2.5 mb-4">
@@ -799,12 +796,10 @@ export function AssetsPage({
             </>
           ) : (
             <>
-              <div className="text-[13px] font-semibold">暂无账号数据</div>
-              <div className="text-[11.5px] text-ink3">
-                {pool.length === 0
-                  ? "该版本暂无账号，请先前往「账号池」页面添加账号"
-                  : "数据由后台自动读取；若刚启动应用或读取失败，可点击下方按钮手动读取"}
-              </div>
+              <div className="text-[13px] font-semibold">暂无数据</div>
+              {pool.length === 0 && (
+                <div className="text-[11.5px] text-ink3">请先在「账号池」添加账号</div>
+              )}
               <button className="btn-ghost" disabled={!id || refreshing} onClick={load}>
                 <IconRefresh /> 立即读取
               </button>
@@ -861,14 +856,10 @@ export function AssetsPage({
           >
             {!usage ? (
               <div className="text-[11.5px] text-ink3">
-                {usageErr
-                  ? `自动读取失败：${usageErr}`
-                  : "正在自动读取：从 Trae 本地读取每个会话的 token 用量。需 Trae 处于运行中、切换助手已启用，且无感换号支持文件已重新安装并在重启 Trae 后生效。"}
+                {usageErr ? `读取失败：${usageErr}` : "需 Trae 运行中且切换助手在线"}
               </div>
             ) : usageRows.length === 0 ? (
-              <div className="text-[11.5px] text-ink3">
-                未读取到会话记录（该登录账号在所属项目下无会话，或 Trae 本地数据尚未就绪）。
-              </div>
+              <div className="text-[11.5px] text-ink3">暂无会话记录</div>
             ) : (
               <>
                 <div className="border border-line-soft rounded-[10px] overflow-hidden">
@@ -921,10 +912,8 @@ export function AssetsPage({
                   ))}
                 </div>
                 <div className="text-[11px] text-ink3 mt-2">
-                  统计方式：每轮 token 用量从 Trae 本地记录读取，按会话累加；缓存命中 = 复用已发送的上下文，
-                  不重复计费；上下文 = 最后一轮总 token / 模型上限。
-                  这些会话属于项目 <span className="font-mono">{usage.projectId || "—"}</span>
-                  {usage.totalCount > usageRows.length && `（仅列出最近 ${usageRows.length} 个）`}。
+                  项目 <span className="font-mono">{usage.projectId || "—"}</span>
+                  {usage.totalCount > usageRows.length && ` · 仅列最近 ${usageRows.length} 个`}
                 </div>
                 {usage.models.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-line-soft">
@@ -1082,13 +1071,11 @@ export function AssetsPage({
             {devices === null ? (
               <div className="text-[11.5px] text-ink3">正在读取账号的设备身份…</div>
             ) : devices.length === 0 ? (
-              <div className="text-[11.5px] text-ink3">该版本暂无账号，添加账号后将自动记录其设备身份。</div>
+              <div className="text-[11.5px] text-ink3">暂无账号</div>
             ) : (
               <>
                 <div className="text-[11.5px] text-ink3 mb-2">
-                  每个账号应携带独立的设备身份（设备编号 / 密钥对 / 机器标识），切换账号时一并切换。
-                  信息不完整的账号（较早版本添加）沿用本机当前设备身份，设备身份不会互相混用；
-                  密钥指纹相同，表示这些账号在服务器侧视为同一台设备。
+                  指纹相同即同一设备；✗ 为缺失项。
                 </div>
                 <div className="border border-line-soft rounded-[10px] overflow-hidden">
                   <div className="flex items-center gap-3 px-3 py-2 bg-[#fbfdfe] text-[10.5px] text-ink3">
@@ -1133,10 +1120,10 @@ export function AssetsPage({
             )}
             <div className="mt-3 pt-3 border-t border-line-soft">
               <div className="text-[11px] text-ink3 mb-1.5">
-                Trae 实际使用的设备身份（取自该版本最近一次启动日志）
+                实际生效设备（最近启动日志）
               </div>
               {!icdrs || !icdrs.found ? (
-                <div className="text-[11.5px] text-ink3">{icdrs?.reason || "暂无记录（需先启动一次 Trae）"}</div>
+                <div className="text-[11.5px] text-ink3">{icdrs?.reason || "暂无记录"}</div>
               ) : (
                 <>
                   <div className="grid grid-cols-3 gap-3">
@@ -1157,9 +1144,6 @@ export function AssetsPage({
           <div className="panel px-4 py-3">
             <div className="flex items-center gap-3">
               <span className="text-[13px] font-semibold">高级 / 开发者</span>
-              <span className="text-[11px] text-ink3">
-                原始服务接口响应、运行时主机表、562 条可调用命令、错误码字典
-              </span>
               <button className="ml-auto btn-ghost" onClick={() => setAdvanced((v) => !v)}>
                 {advanced ? "收起" : "展开"}
               </button>
@@ -1191,14 +1175,12 @@ export function AssetsPage({
                       const detail = root ? obj(root.detail) : null;
                       return detail ? <KeyVals data={detail} /> : null;
                     })()}
-                    <div className="text-[11.5px] text-ink3 mt-1">完整字段见「原始数据」</div>
                   </>
                 )}
               </Section>
-
               <Section title="运行时配置" badge={cfg ? cfg.applicationName : "未读取"} raw={cfg ?? undefined}>
                 {!cfg ? (
-                  <div className="text-[11.5px] text-ink3">未读取（需先识别该版本安装位置）。</div>
+                  <div className="text-[11.5px] text-ink3">未读取</div>
                 ) : (
                   <>
                     <div className="grid grid-cols-4 gap-3">
@@ -1236,9 +1218,7 @@ export function AssetsPage({
                 }
               >
                 {!cmds ? (
-                  <div className="text-[11.5px] text-ink3">
-                    切换助手安装并启用后，可列出 Trae 中注册的全部 trae/icube 命令，并调用其中只读、可重复执行的命令。
-                  </div>
+                  <div className="text-[11.5px] text-ink3">需切换助手在线</div>
                 ) : (
                   <>
                     <div className="flex items-center gap-2.5">
@@ -1266,7 +1246,7 @@ export function AssetsPage({
                     </div>
                     <div className="mt-3 bg-[#fbfdfe] border border-line-soft rounded-[8px] p-3">
                       <div className="text-[10.5px] text-ink3 mb-1.5">
-                        调用白名单内的只读/幂等命令（写、删除、分叉类命令将被拒绝）
+                        仅允许只读/幂等命令
                       </div>
                       <div className="flex flex-wrap gap-1.5 mb-2">
                         {SESSION_PRESETS.map((p) => (
@@ -1330,7 +1310,7 @@ export function AssetsPage({
 
       {current && (
         <div className="text-[11px] text-ink3 mt-4">
-          当前选中：{current.name}（{current.ide === "trae-cn" ? "Trae CN" : "Trae"}）
+          当前账号：{current.name}
           {bundle && Object.keys(bundle.errors).length > 0 && (
             <span className="ml-2 text-bad">未返回的服务接口：{Object.keys(bundle.errors).join("、")}</span>
           )}

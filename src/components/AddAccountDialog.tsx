@@ -303,7 +303,7 @@ export function AddAccountDialog({
               />
             </Field>
             <div className="text-[11.5px] text-ink3 -mt-2">
-              该账号剩余额度低于上述百分比时，自动换号将其视为已耗尽（仅对 Trae 每日额度生效；留空则使用设置页默认值）
+              留空使用设置页默认值
             </div>
             <div className="flex justify-end gap-2.5 mt-6">
               <button className="btn-ghost" onClick={onClose}>
@@ -359,25 +359,21 @@ export function AddAccountDialog({
                       <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="选填" />
                     </Field>
                   </div>
+                  {/* 用户可见文案只保留可执行步骤。以下事实留在注释里：
+                      · 网页版 trae.ai / trae.cn 的登录态不写桌面端 globalStorage，浏览器 Local Storage 没有该键；
+                      · storage.json 由 Trae 回写，运行中可能落后于内存登录态，此时用「读取本机 Token」（shim 走 get-token 取实时凭据）；
+                      · 仍支持「邮箱 + Tab + 密文」与本工具/注册机导出的 TRAEBUNDLE 账号包，但不在主流程宣传；
+                      · 入库只写账号库，需再点「切换」才写进 Trae。 */}
                   <div className="text-[11.5px] text-ink3 mt-2 leading-relaxed space-y-0.5">
                     <div>
-                      只要这一个键的<strong className="text-ink2 font-semibold">值</strong>：
-                      <span className="text-ink2"> iCubeAuthInfo://icube.cloudide</span>
-                      。<span className="text-ink2">usertag</span> 和 <span className="text-ink2">icube-dc</span>{" "}
-                      不是登录 Token，粘贴它们会失败。
+                      填 <span className="text-ink2">iCubeAuthInfo://icube.cloudide</span> 的值；
+                      usertag / icube-dc 不是登录 Token。
                     </div>
                     <div>
-                      · 本机 Trae：打开{" "}
-                      <span className="text-ink2">%APPDATA%\Trae CN\User\globalStorage\storage.json</span>
-                      （国际版目录名是 Trae）→ 复制 cloudide 那一行，或把整个文件贴进来
+                      位置：<span className="text-ink2">%APPDATA%\Trae\User\globalStorage\storage.json</span>（国际版）或{" "}
+                      <span className="text-ink2">%APPDATA%\Trae CN\...</span>（国内版），可整文件粘贴。
                     </div>
-                    <div>
-                      · 浏览器：登录 <span className="text-ink2">https://www.trae.cn</span> /{" "}
-                      <span className="text-ink2">https://www.trae.ai</span> → F12 → Application → Local Storage →
-                      复制同一个键的值
-                    </div>
-                    <div>· 也可粘贴本工具导出的「邮箱 + Tab + 密文」，或注册机 <span className="text-ink2">TRAEBUNDLE:</span> 账号包</div>
-                    <div>· 添加成功后还要在账号列表点「切换」，才会写进 Trae 登录态</div>
+                    <div>只在网页版登录过？网页登录不产生桌面端凭据，请用「登录窗口添加」。</div>
                   </div>
                   {credHint && <div className="text-[11.5px] text-bad mt-2">{credHint}</div>}
                   <div className="flex justify-end gap-2.5 mt-6">
@@ -401,6 +397,9 @@ export function AddAccountDialog({
                     <div className="flex flex-col items-center justify-center h-[220px] gap-4">
                       <div className="text-[12.5px] text-ink2">
                         扫描本机，识别 Trae / Trae CN 中已登录的账号
+                      </div>
+                      <div className="text-[11.5px] text-ink3 max-w-[380px] text-center">
+                        优先读运行中的实时登录态；读到旧账号时请完全退出 Trae 再扫描
                       </div>
                       <button className="btn-primary mx-auto" disabled={scanning} onClick={startScan}>
                         {scanning ? (
@@ -427,7 +426,7 @@ export function AddAccountDialog({
                   ) : (
                     <div>
                       <div className="text-[12px] text-ink2 mb-2.5">
-                        找到 {results.length} 个已登录账号，勾选后加入账号池（已存在的将自动跳过）
+                        {results.length} 个账号 · 已存在的会自动跳过
                       </div>
                       <div className="border border-line rounded-[10px] divide-y divide-line-soft">
                         {results.map((s) => {
@@ -500,7 +499,7 @@ export function AddAccountDialog({
                       />
                       <span className={`text-[11.5px] ${capturePhase === "error" ? "text-bad" : "text-ink2"}`}>
                         {capturePhase === "idle"
-                          ? "未开始 · 点击下方按钮打开登录窗口"
+                          ? "未开始"
                           : capturePhase === "pending"
                             ? "等待登录…"
                             : capturePhase === "done"
@@ -516,8 +515,7 @@ export function AddAccountDialog({
                       )}
                       {capturePhase === "pending" && (
                         <div className="text-center">
-                          <div className="text-[12.5px] text-ink2">登录窗口已打开，请在新窗口中完成 Trae 登录</div>
-                          <div className="text-[11.5px] text-ink3 mt-1">通过官方登录页完成登录，将自动保存 Token</div>
+                          <div className="text-[12.5px] text-ink2">登录窗口已打开，请完成 Trae 登录</div>
                           <button className="btn-ghost mt-3" onClick={cancelCapture}>
                             取消
                           </button>
