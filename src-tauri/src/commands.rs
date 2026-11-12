@@ -199,7 +199,8 @@ pub async fn scan_local_account(ide: String) -> CmdResult<Option<AccountSummary>
 
 fn scan_local_account_impl(ide: &str) -> CmdResult<Option<AccountSummary>> {
     let kind = parse_ide(ide)?;
-    Ok(switch::scan_current(&kind).map_err(err)?.as_ref().map(to_summary))
+    // 优先读运行中的 IDE（get-token），磁盘 storage.json 可能落后于内存登录态
+    Ok(switch::scan_current_prefer_live(&kind).map_err(err)?.as_ref().map(to_summary))
 }
 
 /// 把扫描到的账号入池（携原始加密串）
@@ -219,7 +220,8 @@ pub async fn import_local_account(
 
 fn import_local_account_impl(ide: &str, name: &str, note: &str) -> CmdResult<AccountSummary> {
     let kind = parse_ide(ide)?;
-    let mut bundle = switch::scan_current(&kind)
+    // 同「读取本机 Token」：优先取运行中 IDE 的实时凭据，避免把旧账号当成当前账号入库
+    let mut bundle = switch::scan_current_prefer_live(&kind)
         .map_err(err)?
         .ok_or("本机未发现登录态")?;
     bundle.name = name.to_string();

@@ -62,6 +62,68 @@ pub fn scan_current(ide: &IdeKind) -> io::Result<Option<AccountBundle>> {
     }))
 }
 
+/// 运行中 IDE 的真实登录凭据：切换助手 `get-token` 返回的 `userInfo` 即完整 auth 对象。
+/// storage.json 只在 Trae 回写时更新，可能落后于内存登录态（实测：登录新号后文件仍是旧号），
+/// 因此「读取本机 Token」必须先问运行中的 IDE。
+pub fn live_auth_blob(ide: &IdeKind) -> Option<String> {
+    if !super::shim::status(*ide).alive {
+        return None;
+    }
+    let r = super::shim::request_hot_swap(*ide, &json!({ "action": "get-token" }), 3000).ok()?;
+    let info = r
+        .get("userInfo")
+        .filter(|v| v.get("token").is_some())
+        .or_else(|| r.pointer("/userInfo/Data"))?;
+    let uid = info.get("userId").and_then(|v| v.as_str()).unwrap_or("");
+    let token = info.get("token").and_then(|v| v.as_str()).unwrap_or("");
+    if uid.is_empty() || token.is_empty() {
+        return None;
+    }
+    Some(super::bytecrypto::encrypt_string(&serde_json::to_string(info).ok()?))
+}
+
+/// 优先内存凭据的当前登录态。磁盘缺失/滞后时也能拿到正确账号；
+/// 设备资产（ECDSA/TinyStorage/遥测）仍取自磁盘——内存接口不提供私钥。
+pub fn scan_current_prefer_live(ide: &IdeKind) -> io::Result<Option<AccountBundle>> {
+    let disk = scan_current(ide)?;
+    let Some(blob) = live_auth_blob(ide) else { return Ok(disk) };
+    let Ok(info) = parse_auth_blob(&blob) else { return Ok(disk) };
+    // 磁盘仍是别的账号时整包重建：设备资产/备注/置顶/阈值都属于旧号，不能带进新号；
+    // 设备资产由入库时的 ensure_bundle_device 重新分配
+    let mut b = match disk {
+        Some(d) if d.user_id == info.user_id => d,
+        _ => AccountBundle {
+            id: String::new(),
+            name: String::new(),
+            email: String::new(),
+            note: String::new(),
+            ide: *ide,
+            status: AccountStatus::Normal,
+            auth_blob: String::new(),
+            usertag_blob: None,
+            user_id: String::new(),
+            ecdsa_blobs: BTreeMap::new(),
+            tiny_storage: None,
+            dev_device_id: None,
+            sqm_id: None,
+            machine_id: None,
+            device_info: None,
+            pinned: false,
+            threshold: None,
+            refresh_error: None,
+            trae_prefs: None,
+        },
+    };
+    b.id = format!("{}-{}", *ide as u8, info.user_id);
+    b.user_id = info.user_id;
+    b.auth_blob = blob;
+    if let Some(a) = info.account.as_ref() {
+        b.name = if a.username.is_empty() { a.email.clone() } else { a.username.clone() };
+        b.email = a.email.clone();
+    }
+    Ok(Some(b))
+}
+
 /// bundle 内 aha 设备对象的解密快照（payload.tinyDevice 用）
 fn tiny_device_of(bundle: &AccountBundle) -> Option<Value> {
     let enc = bundle.tiny_storage.as_ref()?.get(TINY_DEVICE_KEY)?.as_str()?;
