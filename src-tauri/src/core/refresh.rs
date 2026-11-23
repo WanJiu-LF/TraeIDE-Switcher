@@ -4,7 +4,7 @@ use super::bytecrypto;
 use super::model::AccountBundle;
 use super::paths::{IdeKind, IdePaths};
 use super::quota::api_host;
-use super::store::{StorageJson, TinyStorage};
+use super::store::StorageJson;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use p256::ecdsa::{signature::Signer, Signature, SigningKey};
@@ -150,12 +150,9 @@ pub(crate) fn device_ids(ide: &IdeKind) -> Result<(String, String, String), Refr
 
 fn device_identity(ide: &IdeKind) -> Result<(String, String, String, String), RefreshError> {
     let paths = IdePaths::detect(*ide).ok_or(RefreshError::Missing("IDE install"))?;
-    // DeviceID：TinyStorage 的 aha device_id_str（= icube-dc:<did> 键名后缀）
-    let device_id = TinyStorage::load(&paths)
-        .ok()
-        .and_then(|ts| ts.get_decrypted("aha.device.device_id"))
-        .and_then(|p| serde_json::from_str::<Value>(&p).ok())
-        .and_then(|v| v.get("device_id_str").and_then(|s| s.as_str()).map(String::from))
+    // DeviceID：先自愈对齐（IDE 回写 TinyStorage 会让 did 与现存 icube-dc 密钥脱节），
+    // 再按 icube-dc:<did> 取密钥对
+    let device_id = super::switch::repair_local_device(ide)
         .ok_or(RefreshError::Missing("device_id_str"))?;
     let sj = StorageJson::load(&paths).map_err(|_| RefreshError::Missing("storage.json"))?;
     let machine_id = sj
@@ -167,7 +164,7 @@ fn device_identity(ide: &IdeKind) -> Result<(String, String, String, String), Re
     let kp_blob = sj
         .get(&kp_key)
         .and_then(|v| v.as_str())
-        .ok_or(RefreshError::Missing("device keypair"))?;
+        .ok_or(RefreshError::Missing("device keypair（请先在 Trae 内退出并重新登录以重建设备密钥）"))?;
     let kp: Value = serde_json::from_str(&bytecrypto::decrypt_string(kp_blob).map_err(|e| RefreshError::Sign(e.to_string()))?)
         .map_err(|e| RefreshError::Response(e.to_string()))?;
     let private_pem = kp

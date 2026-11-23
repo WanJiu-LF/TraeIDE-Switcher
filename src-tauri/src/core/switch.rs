@@ -26,6 +26,8 @@ pub const TINY_DEVICE_KEY: &str = "aha.device.device_id";
 pub fn scan_current(ide: &IdeKind) -> io::Result<Option<AccountBundle>> {
     let paths = IdePaths::detect(*ide)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "IDE not installed"))?;
+    // 采集前先对齐设备身份，避免把「设备 id 与密钥不匹配」的坏组合存进账号包
+    let _ = repair_local_device(ide);
     let sj = StorageJson::load(&paths)?;
     let Some(blob) = sj.get(AUTH_KEY).and_then(|v| v.as_str()) else {
         return Ok(None);
@@ -157,9 +159,27 @@ fn new_tiny_device() -> Value {
     json!({ "device_id_str": did, "install_id_str": iid, "uuid": uuid, "version": "1.2" })
 }
 
-/// 为该号铸造一份独立 aha 设备身份（写回 tiny_storage 快照），返回新的 device_id_str
+/// 生成 Trae/AHA 同形态的 ECDSA P-256 密钥对（PKCS#8 私钥 / SPKI 公钥 PEM），加密后入库。
+/// 与 refresh::device_identity 读取的 privateKeyPEM 格式一致。
+fn new_ecdsa_keypair() -> Option<String> {
+    use p256::ecdsa::SigningKey;
+    use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+    let sk = SigningKey::random(&mut rand::thread_rng());
+    let private_pem = sk.to_pkcs8_pem(LineEnding::LF).ok()?;
+    let public_pem = sk.verifying_key().to_public_key_pem(LineEnding::LF).ok()?;
+    let json = json!({
+        "publicKeyPEM": public_pem,
+        "privateKeyPEM": private_pem.as_str(),
+    });
+    Some(super::bytecrypto::encrypt_string(&json.to_string()))
+}
+
+/// 为该号铸造一份独立 aha 设备身份（写回 tiny_storage 快照），返回新的 device_id_str。
+/// 设备与 ECDSA 密钥必须同时生成：只有 did 没有密钥的设备会让登录窗口/续期直接失败。
 pub fn mint_device(bundle: &mut AccountBundle) -> Option<String> {
     let dev = new_tiny_device();
+    let did = dev.get("device_id_str")?.as_str()?.to_string();
+    let kp_blob = new_ecdsa_keypair()?;
     let plain = serde_json::to_string(&dev).ok()?;
     let enc = super::bytecrypto::encrypt_string(&plain);
     let map = bundle
@@ -167,7 +187,8 @@ pub fn mint_device(bundle: &mut AccountBundle) -> Option<String> {
         .get_or_insert_with(|| Value::Object(serde_json::Map::new()))
         .as_object_mut()?;
     map.insert(TINY_DEVICE_KEY.to_string(), Value::String(enc));
-    dev.get("device_id_str")?.as_str().map(String::from)
+    bundle.ecdsa_blobs.insert(format!("{ECDSA_PREFIX}{did}"), kp_blob);
+    Some(did)
 }
 
 /// 设备身份唯一化：缺设备、或与他号共用同一 aha 设备时，铸造新设备。
@@ -233,6 +254,75 @@ pub fn current_machine_id(ide: &IdeKind) -> Option<String> {
         .get(MACHINE_ID_KEY)
         .and_then(|v| v.as_str())
         .map(String::from)
+}
+
+/// 本机设备身份自愈：aha 设备 id 与 storage.json 的 icube-dc 密钥必须成对。
+/// 运行中的 IDE 会用内存里的旧设备回写 TinyStorage（实测热切换后数分钟），
+/// 造成 TinyStorage 的 device_id_str 与现存唯一 icube-dc 密钥脱节——
+/// 登录窗口前置校验会直接报 missing device keypair。
+/// 这里以「有密钥的 did」为准把 TinyStorage 对齐；无任何可用密钥时保持原状交由调用方报错。
+pub fn repair_local_device(ide: &IdeKind) -> Option<String> {
+    let paths = IdePaths::detect(*ide)?;
+    let sj = StorageJson::load(&paths).ok()?;
+    let keyed = |d: &str| {
+        sj.get(&format!("{ECDSA_PREFIX}{d}"))
+            .and_then(|v| v.as_str())
+            .is_some()
+    };
+    let ts_did = TinyStorage::load(&paths)
+        .ok()
+        .and_then(|ts| ts.get_decrypted(TINY_DEVICE_KEY))
+        .and_then(|p| serde_json::from_str::<Value>(&p).ok())
+        .and_then(|v| v.get("device_id_str").and_then(|s| s.as_str()).map(String::from));
+    // IDE 新注册的设备优先（它自己写过密钥）；否则回落到工具上次切换写入的 did；再退到唯一密钥
+    let canonical = ts_did
+        .clone()
+        .filter(|d| keyed(d))
+        .or_else(|| {
+            sj.get(DEVICE_ID_STR_KEY)
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .filter(|d| keyed(d))
+        })
+        .or_else(|| {
+            sj.keys_with_prefix(ECDSA_PREFIX).into_iter().find_map(|k| {
+                k.strip_prefix(ECDSA_PREFIX)
+                    .map(String::from)
+                    .filter(|d| keyed(d))
+            })
+        });
+    let canonical = match canonical {
+        Some(d) => d,
+        None => return ts_did,
+    };
+    if ts_did.as_deref() != Some(canonical.as_str()) {
+        if let Ok(mut ts) = TinyStorage::load(&paths) {
+            if let Some(plain) = ts.get_decrypted(TINY_DEVICE_KEY) {
+                if let Ok(mut dev) = serde_json::from_str::<Value>(&plain) {
+                    if let Some(obj) = dev.as_object_mut() {
+                        // 只改 device_id_str：install_id/uuid 属于本机安装，保留原值
+                        obj.insert("device_id_str".into(), Value::String(canonical.clone()));
+                        ts.set_encrypted(TINY_DEVICE_KEY, &serde_json::to_string(&dev).unwrap_or_default());
+                        if ts.save().is_ok() {
+                            super::logger::log(
+                                super::logger::Level::Info,
+                                super::logger::Source::Switch,
+                                format!("本机设备身份自愈：aha 设备对齐到 {canonical}"),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Some(canonical)
+}
+
+/// 账号包的 aha 设备是否带配套 ECDSA 密钥（旧版入库/仅 token 导入的账号可能没有）
+fn bundle_device_keyed(bundle: &AccountBundle) -> bool {
+    device_id_str_of(bundle)
+        .map(|d| bundle.ecdsa_blobs.contains_key(&format!("{ECDSA_PREFIX}{d}")))
+        .unwrap_or(false)
 }
 
 /// 热换号（shim 主通道）：经扩展宿主调 _tsw.replaceUserInfo，免 --inspect
@@ -346,10 +436,21 @@ fn write_bundle_identity(sj: &mut StorageJson, bundle: &AccountBundle, machine_i
         sj.set_str(SQM_ID_KEY, v);
     }
     sj.set_str(HAS_DEVICE_UPDATED_KEY, "true");
+    // 设备身份必须与密钥成对落盘：did 在 ecdsa_blobs 里没有对应密钥时，
+    // 绝不能写新设备 id（会立刻造成登录窗口/续期 missing device keypair），保留本机现值。
+    let keyed = bundle_device_keyed(bundle);
     if let Some(d) = device_id_str_of(bundle) {
-        sj.set_str(DEVICE_ID_STR_KEY, &d);
+        if keyed {
+            sj.set_str(DEVICE_ID_STR_KEY, &d);
+        } else {
+            super::logger::log(
+                super::logger::Level::Warn,
+                super::logger::Source::Switch,
+                format!("账号 {} 的设备 {d} 缺 ECDSA 密钥，保留本机设备身份", bundle.name),
+            );
+        }
     }
-    if !bundle.ecdsa_blobs.is_empty() {
+    if keyed {
         sj.remove_with_prefix(ECDSA_PREFIX);
         for (k, v) in &bundle.ecdsa_blobs {
             sj.set_str(k, v);
@@ -387,7 +488,13 @@ fn persist_after_hot_with(
     write_bundle_identity(&mut sj, bundle, Some(preserved_machine_id));
     sj.save()?;
 
-    if let Some(snapshot) = bundle.tiny_storage.clone() {
+    if let Some(mut snapshot) = bundle.tiny_storage.clone() {
+        // 无密钥的设备不能落盘：否则 TinyStorage 会指向一把不存在的 icube-dc 密钥
+        if !bundle_device_keyed(bundle) {
+            if let Some(map) = snapshot.as_object_mut() {
+                map.remove(TINY_DEVICE_KEY);
+            }
+        }
         let mut ts = TinyStorage::load_or_default(paths)?;
         ts.merge_data(snapshot);
         ts.save()?;

@@ -21,7 +21,8 @@ pub enum InjectStatus {
     NotPatched,
 }
 
-/// 定位 holder 类的 setUserInfo 定义：形态 `setUserInfo(x,y){` 且方法体 400 字符内含 `forceLogout`
+/// 定位 holder 类的 setUserInfo 定义：形态 `setUserInfo(x,y){` 或 `setUserInfo(x,y,z){`
+/// 且方法体 400 字符内含 `forceLogout`
 fn find_holder_setuserinfo(src: &str) -> Option<usize> {
     let mut from = 0;
     while let Some(rel) = src[from..].find("setUserInfo(") {
@@ -29,18 +30,17 @@ fn find_holder_setuserinfo(src: &str) -> Option<usize> {
         let after = start + "setUserInfo(".len();
         if let Some(close) = src[after..].find(')') {
             let params = &src[after..after + close];
-            let is_two_ident = {
-                let parts: Vec<&str> = params.split(',').collect();
-                parts.len() == 2
-                    && parts.iter().all(|p| {
-                        let t = p.trim();
-                        !t.is_empty()
-                            && t.chars().next().unwrap().is_ascii_alphabetic()
-                            && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-                    })
+            let valid_ident = |p: &&str| -> bool {
+                let t = p.trim();
+                !t.is_empty()
+                    && t.chars().next().unwrap().is_ascii_alphabetic()
+                    && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
             };
+            let parts: Vec<&str> = params.split(',').collect();
+            let valid_arg_count = parts.len() == 2 || parts.len() == 3;
+            let valid_params = valid_arg_count && parts.iter().all(valid_ident);
             let brace_at = after + close + 1;
-            if is_two_ident
+            if valid_params
                 && src[brace_at..].starts_with('{')
                 && src[start..(start + 400).min(src.len())].contains("forceLogout")
             {
